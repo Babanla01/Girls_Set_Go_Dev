@@ -1,0 +1,51 @@
+# ============================================================================
+# docker-compose.yml  (DEVELOPMENT ONLY)
+#
+# Starts the two services the backend needs while you develop:
+#   - PostgreSQL : the main database
+#   - Redis      : rate-limit counters and background jobs (used in later phases)
+#
+# Both are bound to 127.0.0.1 so only YOUR computer can reach them.
+# The passwords below are for local development only - production uses
+# different, secret values that are never committed to git.
+#
+# Start:  docker compose up -d
+# Stop:   docker compose down          (data is kept)
+# Reset:  docker compose down -v       (DELETES all local data)
+# ============================================================================
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gsg_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gsg
+      POSTGRES_PASSWORD: gsg_dev_password
+      POSTGRES_DB: gsg_lms
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - gsg_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gsg -d gsg_lms"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: gsg_redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - gsg_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  gsg_postgres_data:
+  gsg_redis_data:

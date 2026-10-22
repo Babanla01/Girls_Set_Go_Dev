@@ -1,0 +1,18 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Secrets - never commit real environment files
+.env
+.env.*
+!.env.example
+
+# Local file storage used during development
+uploads/
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.log

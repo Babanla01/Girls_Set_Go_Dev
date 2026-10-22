@@ -1,0 +1,325 @@
+// ============================================================================
+// prisma/schema.prisma - Girls Set Go LMS database structure (Batch 2)
+//
+// This file describes the tables to Prisma (so the code is type-safe).
+// The matching SQL lives in prisma/migrations/. A few rules that Prisma cannot
+// express (CHECK rules, a "partial" unique index, the append-only audit log)
+// are written by hand in that SQL file - look for the "HAND-WRITTEN" section.
+//
+// Conventions:
+//  - Table/column names in the database are snake_case; code uses camelCase.
+//  - IDs are random UUIDs (cannot be guessed or counted by outsiders).
+//  - Every timestamp is stored WITH timezone (timestamptz).
+//  - Users are never deleted - they are suspended. Foreign keys that point at
+//    users use "Restrict" so history can never be orphaned by accident.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// --------------------------------------------------------------------- enums
+
+/// What a person is. One email = one account = one role.
+enum Role {
+  STUDENT
+  INSTRUCTOR
+  ADMIN
+}
+
+/// Whether the account can sign in.
+///  INVITED   : created by an admin, password not set yet (cannot sign in)
+///  ACTIVE    : normal working account (must have a password)
+///  SUSPENDED : switched off by an admin (history is kept)
+enum AccountStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+}
+
+/// Why a one-time link exists.
+enum AuthTokenType {
+  INVITE
+  PASSWORD_RESET
+}
+
+enum InstructorApplicationStatus {
+  PENDING
+  APPROVED
+  DECLINED
+}
+
+enum EmailStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+/// A track is archived instead of deleted, so history is never lost.
+enum TrackStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+/// DRAFT = still being prepared; PUBLISHED = ready for students; ARCHIVED = retired.
+enum CourseStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum CohortStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+// -------------------------------------------------------------------- models
+
+/// Every person who can sign in: students, instructors and admins.
+model User {
+  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Always stored lowercase (the database enforces this).
+  email        String        @unique @db.VarChar(254)
+  fullName     String        @map("full_name") @db.VarChar(120)
+  /// Argon2id hash. Empty while an invited user has not chosen a password yet.
+  passwordHash String?       @map("password_hash")
+  role         Role
+  status       AccountStatus
+  lastLoginAt  DateTime?     @map("last_login_at") @db.Timestamptz(3)
+  /// The admin who created this account (instructors/admins). Null for self sign-up.
+  createdById  String?       @map("created_by_id") @db.Uuid
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy              User?                   @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  createdUsers           User[]                  @relation("UserCreatedBy")
+  sessions               Session[]
+  authTokens             AuthToken[]
+  auditLogs              AuditLog[]
+  reviewedInstructorApps InstructorApplication[] @relation("ApplicationReviewedBy")
+  /// Set when this account was created by approving an instructor application.
+  instructorApplication  InstructorApplication?  @relation("ApplicationCreatedUser")
+  tracksCreated          Track[]                 @relation("TrackCreatedBy")
+  coursesCreated         Course[]                @relation("CourseCreatedBy")
+  cohortsCreated         Cohort[]                @relation("CohortCreatedBy")
+  /// The cohorts this person teaches (only meaningful for instructors).
+  cohortAssignments      CohortInstructor[]      @relation("CohortInstructorUser")
+  cohortAssignmentsMade  CohortInstructor[]      @relation("CohortAssignedBy")
+
+  @@index([role, status])
+  @@map("users")
+}
+
+/// One row per signed-in device. Revoking a row logs that device out at once.
+model Session {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  /// SHA-256 of the session token. The raw token only ever lives in the cookie.
+  tokenHash  String    @unique @map("token_hash") @db.Char(64)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(3)
+  lastUsedAt DateTime  @default(now()) @map("last_used_at") @db.Timestamptz(3)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(3)
+  ipAddress  String?   @map("ip_address") @db.VarChar(45)
+  userAgent  String?   @map("user_agent") @db.VarChar(255)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// One-time links: instructor invites and password resets.
+model AuthToken {
+  id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String        @map("user_id") @db.Uuid
+  type      AuthTokenType
+  /// SHA-256 of the token in the emailed link (never the token itself).
+  tokenHash String        @unique @map("token_hash") @db.Char(64)
+  expiresAt DateTime      @map("expires_at") @db.Timestamptz(3)
+  /// Set the moment the link is used. A used link can never work again.
+  usedAt    DateTime?     @map("used_at") @db.Timestamptz(3)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([expiresAt])
+  @@map("auth_tokens")
+}
+
+/// Permanent record of important actions. Append-only: the database refuses
+/// to update or delete rows (see the HAND-WRITTEN section of the migration).
+model AuditLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Who did it. Null means the system did it (for example a scheduled job).
+  actorId    String?  @map("actor_id") @db.Uuid
+  /// What happened, e.g. "instructor.invited".
+  action     String   @db.VarChar(100)
+  /// What it happened to, e.g. "user", "instructor_application".
+  entityType String   @map("entity_type") @db.VarChar(50)
+  entityId   String?  @map("entity_id") @db.VarChar(64)
+  /// Extra detail. Never put passwords or tokens here.
+  metadata   Json?
+  ipAddress  String?  @map("ip_address") @db.VarChar(45)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+/// Someone asking to become an instructor. NOT an account: the applicant has
+/// no login. An admin may approve it, which creates an INVITED instructor user.
+model InstructorApplication {
+  id             String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fullName       String                      @map("full_name") @db.VarChar(120)
+  /// Always lowercase (enforced by the database).
+  email          String                      @db.VarChar(254)
+  phone          String                      @db.VarChar(30)
+  expertise      String                      @db.VarChar(200)
+  /// Which track they would like to teach (free text; optional).
+  preferredTrack String?                     @map("preferred_track") @db.VarChar(100)
+  bio            String                      @db.VarChar(2000)
+  experience     String                      @db.VarChar(3000)
+  /// Portfolio / LinkedIn / GitHub links. Links only - no file uploads.
+  links          String[]
+  motivation     String                      @db.VarChar(2000)
+  availability   String                      @db.VarChar(500)
+  status         InstructorApplicationStatus @default(PENDING)
+  reviewedById   String?                     @map("reviewed_by_id") @db.Uuid
+  reviewedAt     DateTime?                   @map("reviewed_at") @db.Timestamptz(3)
+  /// Internal note for admins only. Never shown to the applicant.
+  decisionNote   String?                     @map("decision_note") @db.VarChar(1000)
+  /// The instructor account created from this application (when approved).
+  createdUserId  String?                     @unique @map("created_user_id") @db.Uuid
+  createdAt      DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  reviewedBy  User? @relation("ApplicationReviewedBy", fields: [reviewedById], references: [id], onDelete: Restrict)
+  createdUser User? @relation("ApplicationCreatedUser", fields: [createdUserId], references: [id], onDelete: Restrict)
+
+  // Used by the retention cleanup (declined applications deleted after 2 months).
+  @@index([status, reviewedAt])
+  @@index([email])
+  @@map("instructor_applications")
+}
+
+/// Emails waiting to be sent. A row is written in the SAME database transaction
+/// as the action that causes the email, so an email can never be lost or sent
+/// for something that was rolled back. A background worker (later batch) sends them.
+model EmailOutbox {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  toEmail       String      @map("to_email") @db.VarChar(254)
+  /// Which template to use, e.g. "instructor-invite".
+  template      String      @db.VarChar(100)
+  /// Values for the template. May briefly hold a one-time link; the sender
+  /// clears it after a successful send.
+  payload       Json
+  status        EmailStatus @default(PENDING)
+  attempts      Int         @default(0)
+  lastError     String?     @map("last_error") @db.VarChar(500)
+  nextAttemptAt DateTime    @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
+  sentAt        DateTime?   @map("sent_at") @db.Timestamptz(3)
+  createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([status, nextAttemptAt])
+  @@map("email_outbox")
+}
+
+// ------------------------------------------------- tracks, courses, cohorts
+
+/// A programme area, e.g. "AI & Robotics". Data, not code: admins create them.
+model Track {
+  id          String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String      @db.VarChar(100)
+  /// Lowercase copy of the name. Its unique index forbids two tracks whose
+  /// names differ only by capital letters.
+  nameKey     String      @unique @map("name_key") @db.VarChar(100)
+  description String?     @db.VarChar(2000)
+  status      TrackStatus @default(ACTIVE)
+  /// The admin who created it. Null when created by the seed command.
+  createdById String?     @map("created_by_id") @db.Uuid
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy User?    @relation("TrackCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  courses   Course[]
+
+  @@map("tracks")
+}
+
+/// What is taught inside a track. Modules and lessons attach to it in a later batch.
+model Course {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  trackId     String       @map("track_id") @db.Uuid
+  title       String       @db.VarChar(150)
+  /// Lowercase copy of the title; unique within the track.
+  titleKey    String       @map("title_key") @db.VarChar(150)
+  description String?      @db.VarChar(5000)
+  status      CourseStatus @default(DRAFT)
+  createdById String?      @map("created_by_id") @db.Uuid
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  track     Track    @relation(fields: [trackId], references: [id], onDelete: Restrict)
+  createdBy User?    @relation("CourseCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  cohorts   Cohort[]
+
+  @@unique([trackId, titleKey])
+  @@index([trackId, status])
+  @@map("courses")
+}
+
+/// One intake of students following a course over a period of time.
+model Cohort {
+  id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  courseId    String       @map("course_id") @db.Uuid
+  name        String       @db.VarChar(120)
+  /// Lowercase copy of the name; unique within the course.
+  nameKey     String       @map("name_key") @db.VarChar(120)
+  /// Calendar dates (no time of day): "runs from 3 Nov to 20 Feb".
+  startsOn    DateTime     @map("starts_on") @db.Date
+  endsOn      DateTime     @map("ends_on") @db.Date
+  /// Maximum students (optional). Enforced when students are admitted.
+  capacity    Int?
+  status      CohortStatus @default(ACTIVE)
+  createdById String?      @map("created_by_id") @db.Uuid
+  createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  course      Course             @relation(fields: [courseId], references: [id], onDelete: Restrict)
+  createdBy   User?              @relation("CohortCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  instructors CohortInstructor[]
+
+  @@unique([courseId, nameKey])
+  @@index([courseId, status])
+  @@index([status, startsOn])
+  @@map("cohorts")
+}
+
+/// Which instructor teaches which cohort. One row per pair.
+/// The database refuses anyone who is not an INSTRUCTOR (see the migration).
+model CohortInstructor {
+  cohortId     String   @map("cohort_id") @db.Uuid
+  instructorId String   @map("instructor_id") @db.Uuid
+  assignedById String?  @map("assigned_by_id") @db.Uuid
+  assignedAt   DateTime @default(now()) @map("assigned_at") @db.Timestamptz(3)
+
+  cohort     Cohort @relation(fields: [cohortId], references: [id], onDelete: Restrict)
+  instructor User   @relation("CohortInstructorUser", fields: [instructorId], references: [id], onDelete: Restrict)
+  assignedBy User?  @relation("CohortAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+
+  @@id([cohortId, instructorId])
+  @@index([instructorId])
+  @@map("cohort_instructors")
+}
