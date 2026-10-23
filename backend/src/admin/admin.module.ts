@@ -2,12 +2,15 @@
  * admin.module.ts
  * ---------------------------------------------------------------------------
  * Everything an administrator does through the API lives under this module.
- * So far: instructors, the audit log, tracks, courses and cohorts. Later
- * batches add students, applications and announcements here.
+ * So far: instructors, the audit log, tracks, courses, cohorts, student
+ * applications and a read-only student list. Later batches add student
+ * management and announcements here.
  */
 import { Module } from '@nestjs/common';
 
 import { AuthModule } from '../auth/auth.module';
+import { ApplicationsController } from './applications/applications.controller';
+import { ApplicationsService } from './applications/applications.service';
 import { AuditLogsController } from './audit-logs/audit-logs.controller';
 import { AuditLogsService } from './audit-logs/audit-logs.service';
 import { CohortsController } from './cohorts/cohorts.controller';
@@ -16,6 +19,8 @@ import { CoursesController } from './courses/courses.controller';
 import { CoursesService } from './courses/courses.service';
 import { InstructorsController } from './instructors/instructors.controller';
 import { InstructorsService } from './instructors/instructors.service';
+import { AdminStudentsController } from './students/students.controller';
+import { AdminStudentsService } from './students/students.service';
 import { TracksController } from './tracks/tracks.controller';
 import { TracksService } from './tracks/tracks.service';
 
@@ -27,7 +32,17 @@ import { TracksService } from './tracks/tracks.service';
     TracksController,
     CoursesController,
     CohortsController,
+    ApplicationsController,
+    AdminStudentsController,
   ],
-  providers: [InstructorsService, AuditLogsService, TracksService, CoursesService, CohortsService],
+  providers: [
+    InstructorsService,
+    AuditLogsService,
+    TracksService,
+    CoursesService,
+    CohortsService,
+    ApplicationsService,
+    AdminStudentsService,
+  ],
 })
 export class AdminModule {}

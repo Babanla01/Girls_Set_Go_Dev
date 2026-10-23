@@ -285,7 +285,7 @@ export class AuthService {
   }
 
   /** Builds a link into the website, e.g. https://learn.example.org/reset-password?token=... */
-  buildLink(page: 'reset-password' | 'set-password', token: string): string {
+  buildLink(page: 'reset-password' | 'set-password' | 'verify-email', token: string): string {
     const base = this.config.get('APP_URL', { infer: true }).replace(/\/+$/, '');
     return `${base}/${page}?token=${token}`;
   }

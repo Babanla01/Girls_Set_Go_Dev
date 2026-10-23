@@ -2,7 +2,7 @@
  * token.service.ts
  * ---------------------------------------------------------------------------
  * Creates and checks the random secrets behind sessions and one-time links
- * (invites and password resets).
+ * (invites, password resets and email confirmations).
  *
  * Plain-English notes:
  *  - A token is 32 random bytes. The database stores only a keyed hash
@@ -21,7 +21,7 @@ import { createHmac, randomBytes } from 'node:crypto';
 import type { DbClient } from '../common/types/db-client';
 import type { Env } from '../config/env.validation';
 import { PrismaService } from '../prisma/prisma.service';
-import { INVITE_LINK_TTL_MS, RESET_LINK_TTL_MS } from './auth.constants';
+import { INVITE_LINK_TTL_MS, RESET_LINK_TTL_MS, VERIFY_LINK_TTL_MS } from './auth.constants';
 
 @Injectable()
 export class TokenService {
@@ -58,7 +58,12 @@ export class TokenService {
     });
 
     const token = this.generate();
-    const ttl = type === AuthTokenType.INVITE ? INVITE_LINK_TTL_MS : RESET_LINK_TTL_MS;
+    const ttl =
+      type === AuthTokenType.INVITE
+        ? INVITE_LINK_TTL_MS
+        : type === AuthTokenType.EMAIL_VERIFICATION
+          ? VERIFY_LINK_TTL_MS
+          : RESET_LINK_TTL_MS;
 
     await db.authToken.create({
       data: {

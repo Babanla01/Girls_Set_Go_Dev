@@ -21,6 +21,8 @@ export const SESSION_TOUCH_INTERVAL_MS = 5 * MINUTE;
 // --- One-time links ---------------------------------------------------------
 export const INVITE_LINK_TTL_MS = 7 * DAY;
 export const RESET_LINK_TTL_MS = 1 * HOUR;
+/** Email verification links expire after 24 hours. */
+export const VERIFY_LINK_TTL_MS = 1 * DAY;
 
 // --- Guessing protection ------------------------------------------------------
 /** After this many wrong passwords for one email... */

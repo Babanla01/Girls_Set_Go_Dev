@@ -10,7 +10,7 @@
  *   With the lock, the two transactions take turns, so the second one sees the
  *   first one's result and refuses correctly.
  *
- * Lock ORDER (always parent before child) is track -> course. Keeping one
+ * Lock ORDER (always parent before child) is track -> course -> cohort. Keeping one
  * order everywhere means two requests can never wait on each other forever.
  */
 import type { DbClient } from '../common/types/db-client';
@@ -21,4 +21,13 @@ export async function lockTrack(db: DbClient, trackId: string): Promise<void> {
 
 export async function lockCourse(db: DbClient, courseId: string): Promise<void> {
   await db.$queryRaw`SELECT "id" FROM "courses" WHERE "id" = ${courseId}::uuid FOR UPDATE`;
+}
+
+/**
+ * Locks a cohort. Used when ACCEPTING a student (so two admins cannot both take
+ * the last seat) and when ARCHIVING a cohort (so it cannot be archived at the
+ * very moment a student is being accepted into it).
+ */
+export async function lockCohort(db: DbClient, cohortId: string): Promise<void> {
+  await db.$queryRaw`SELECT "id" FROM "cohorts" WHERE "id" = ${cohortId}::uuid FOR UPDATE`;
 }

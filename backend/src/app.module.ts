@@ -25,8 +25,10 @@ import { Env, validateEnv } from './config/env.validation';
 import { HealthModule } from './health/health.module';
 import { InstructorModule } from './instructor/instructor.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { PublicModule } from './public/public.module';
 import { RedisModule } from './redis/redis.module';
 import { RedisService } from './redis/redis.service';
+import { StudentsModule } from './students/students.module';
 
 @Module({
   imports: [
@@ -100,6 +102,8 @@ import { RedisService } from './redis/redis.service';
     AuthModule,
     AdminModule,
     InstructorModule,
+    StudentsModule,
+    PublicModule,
     HealthModule,
   ],
   providers: [

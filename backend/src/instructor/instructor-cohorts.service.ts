@@ -14,7 +14,7 @@ import { AuthenticatedUser } from '../auth/auth.types';
 import { PolicyService } from '../auth/policy/policy.service';
 import { todayInProgrammeZone } from '../catalog/catalog.util';
 import { CohortView, cohortSelect, toCohortView } from '../catalog/cohort.view';
-import { buildPage, Paginated, toSkipTake } from '../common/pagination/pagination';
+import { buildPage, Paginated, PaginationQueryDto, toSkipTake } from '../common/pagination/pagination';
 import { PrismaService } from '../prisma/prisma.service';
 import type { ListMyCohortsQuery } from './dto/list-my-cohorts.query';
 
@@ -67,5 +67,37 @@ export class InstructorCohortsService {
       cohort: toCohortView(row, todayInProgrammeZone()),
       instructors: colleagues.map((c) => c.instructor),
     };
+  }
+
+  /**
+   * The students currently enrolled in one of MY cohorts - NAMES ONLY (no
+   * emails, phone numbers, dates of birth or guardian details). Someone else's
+   * cohort answers "not found", exactly like one that does not exist.
+   */
+  async listStudents(
+    user: AuthenticatedUser,
+    cohortId: string,
+    query: PaginationQueryDto,
+  ): Promise<Paginated<{ id: string; fullName: string; enrolledAt: Date }>> {
+    if (!(await this.policy.can(user, COHORT_VIEW_ACTION, cohortId))) {
+      throw new NotFoundException('Cohort not found.');
+    }
+
+    const where = { cohortId, status: 'ACTIVE' as const };
+    const [total, rows] = await Promise.all([
+      this.prisma.enrollment.count({ where }),
+      this.prisma.enrollment.findMany({
+        where,
+        orderBy: [{ student: { fullName: 'asc' } }, { id: 'asc' }],
+        ...toSkipTake(query),
+        select: { enrolledAt: true, student: { select: { id: true, fullName: true } } },
+      }),
+    ]);
+
+    return buildPage(
+      rows.map((row) => ({ id: row.student.id, fullName: row.student.fullName, enrolledAt: row.enrolledAt })),
+      total,
+      query,
+    );
   }
 }

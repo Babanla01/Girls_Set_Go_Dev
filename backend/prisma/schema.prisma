@@ -1,10 +1,10 @@
 // ============================================================================
-// prisma/schema.prisma - Girls Set Go LMS database structure (Batch 2)
+// prisma/schema.prisma - Girls Set Go LMS database structure
 //
 // This file describes the tables to Prisma (so the code is type-safe).
 // The matching SQL lives in prisma/migrations/. A few rules that Prisma cannot
-// express (CHECK rules, a "partial" unique index, the append-only audit log)
-// are written by hand in that SQL file - look for the "HAND-WRITTEN" section.
+// express (CHECK rules, "partial" unique indexes, triggers) are written by hand
+// in those SQL files - look for the "HAND-WRITTEN" sections.
 //
 // Conventions:
 //  - Table/column names in the database are snake_case; code uses camelCase.
@@ -46,6 +46,7 @@ enum AccountStatus {
 enum AuthTokenType {
   INVITE
   PASSWORD_RESET
+  EMAIL_VERIFICATION
 }
 
 enum InstructorApplicationStatus {
@@ -78,38 +79,59 @@ enum CohortStatus {
   ARCHIVED
 }
 
+/// Where a student's application stands. Separate from the account status and
+/// from enrollment: course access comes ONLY from an active enrollment.
+enum ApplicationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  TRANSFERRED
+  WITHDRAWN
+}
+
 // -------------------------------------------------------------------- models
 
 /// Every person who can sign in: students, instructors and admins.
 model User {
-  id           String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   /// Always stored lowercase (the database enforces this).
-  email        String        @unique @db.VarChar(254)
-  fullName     String        @map("full_name") @db.VarChar(120)
+  email           String        @unique @db.VarChar(254)
+  fullName        String        @map("full_name") @db.VarChar(120)
   /// Argon2id hash. Empty while an invited user has not chosen a password yet.
-  passwordHash String?       @map("password_hash")
-  role         Role
-  status       AccountStatus
-  lastLoginAt  DateTime?     @map("last_login_at") @db.Timestamptz(3)
+  passwordHash    String?       @map("password_hash")
+  role            Role
+  status          AccountStatus
+  lastLoginAt     DateTime?     @map("last_login_at") @db.Timestamptz(3)
+  /// When the person proved the address is theirs (by clicking the emailed link). Null = not yet.
+  emailVerifiedAt DateTime?     @map("email_verified_at") @db.Timestamptz(3)
   /// The admin who created this account (instructors/admins). Null for self sign-up.
-  createdById  String?       @map("created_by_id") @db.Uuid
-  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdById     String?       @map("created_by_id") @db.Uuid
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  createdBy              User?                   @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  createdUsers           User[]                  @relation("UserCreatedBy")
-  sessions               Session[]
-  authTokens             AuthToken[]
-  auditLogs              AuditLog[]
-  reviewedInstructorApps InstructorApplication[] @relation("ApplicationReviewedBy")
+  createdBy                   User?                   @relation("UserCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  createdUsers                User[]                  @relation("UserCreatedBy")
+  sessions                    Session[]
+  authTokens                  AuthToken[]
+  auditLogs                   AuditLog[]
+  reviewedInstructorApps      InstructorApplication[] @relation("ApplicationReviewedBy")
   /// Set when this account was created by approving an instructor application.
-  instructorApplication  InstructorApplication?  @relation("ApplicationCreatedUser")
-  tracksCreated          Track[]                 @relation("TrackCreatedBy")
-  coursesCreated         Course[]                @relation("CourseCreatedBy")
-  cohortsCreated         Cohort[]                @relation("CohortCreatedBy")
+  instructorApplication       InstructorApplication?  @relation("ApplicationCreatedUser")
+  tracksCreated               Track[]                 @relation("TrackCreatedBy")
+  coursesCreated              Course[]                @relation("CourseCreatedBy")
+  cohortsCreated              Cohort[]                @relation("CohortCreatedBy")
   /// The cohorts this person teaches (only meaningful for instructors).
-  cohortAssignments      CohortInstructor[]      @relation("CohortInstructorUser")
-  cohortAssignmentsMade  CohortInstructor[]      @relation("CohortAssignedBy")
+  cohortAssignments           CohortInstructor[]      @relation("CohortInstructorUser")
+  cohortAssignmentsMade       CohortInstructor[]      @relation("CohortAssignedBy")
+  studentProfile              StudentProfile?
+  studentApplication          StudentApplication?     @relation("ApplicationStudent")
+  studentApplicationsReviewed StudentApplication[]    @relation("StudentApplicationReviewedBy")
+  enrollments                 Enrollment[]            @relation("EnrollmentStudent")
+  enrollmentsMade             Enrollment[]            @relation("EnrollmentCreatedBy")
 
   @@index([role, status])
   @@map("users")
@@ -135,7 +157,7 @@ model Session {
   @@map("sessions")
 }
 
-/// One-time links: instructor invites and password resets.
+/// One-time links: instructor invites, password resets and email confirmations.
 model AuthToken {
   id        String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId    String        @map("user_id") @db.Uuid
@@ -155,7 +177,7 @@ model AuthToken {
 }
 
 /// Permanent record of important actions. Append-only: the database refuses
-/// to update or delete rows (see the HAND-WRITTEN section of the migration).
+/// to update or delete rows (see the HAND-WRITTEN section of the first migration).
 model AuditLog {
   id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   /// Who did it. Null means the system did it (for example a scheduled job).
@@ -165,7 +187,7 @@ model AuditLog {
   /// What it happened to, e.g. "user", "instructor_application".
   entityType String   @map("entity_type") @db.VarChar(50)
   entityId   String?  @map("entity_id") @db.VarChar(64)
-  /// Extra detail. Never put passwords or tokens here.
+  /// Extra detail. Never put passwords, tokens or personal details here.
   metadata   Json?
   ipAddress  String?  @map("ip_address") @db.VarChar(45)
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -252,8 +274,10 @@ model Track {
   createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  createdBy User?    @relation("TrackCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  courses   Course[]
+  createdBy               User?                @relation("TrackCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  courses                 Course[]
+  /// Applications whose "preferred track" is this one (a preference only; it grants nothing).
+  preferredByApplications StudentApplication[]
 
   @@map("tracks")
 }
@@ -290,7 +314,7 @@ model Cohort {
   /// Calendar dates (no time of day): "runs from 3 Nov to 20 Feb".
   startsOn    DateTime     @map("starts_on") @db.Date
   endsOn      DateTime     @map("ends_on") @db.Date
-  /// Maximum students (optional). Enforced when students are admitted.
+  /// Maximum students (optional). Enforced when students are accepted.
   capacity    Int?
   status      CohortStatus @default(ACTIVE)
   createdById String?      @map("created_by_id") @db.Uuid
@@ -300,6 +324,7 @@ model Cohort {
   course      Course             @relation(fields: [courseId], references: [id], onDelete: Restrict)
   createdBy   User?              @relation("CohortCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   instructors CohortInstructor[]
+  enrollments Enrollment[]
 
   @@unique([courseId, nameKey])
   @@index([courseId, status])
@@ -322,4 +347,85 @@ model CohortInstructor {
   @@id([cohortId, instructorId])
   @@index([instructorId])
   @@map("cohort_instructors")
+}
+
+// ------------------------------------------------------ student admissions
+
+/// Personal details of a student. Kept in its OWN table, away from the login
+/// data, because it is sensitive (and about minors): admin-only, never in logs,
+/// never in list responses, never shown to instructors.
+model StudentProfile {
+  userId        String   @id @map("user_id") @db.Uuid
+  dateOfBirth   DateTime @map("date_of_birth") @db.Date
+  phone         String   @db.VarChar(30)
+  location      String   @db.VarChar(200)
+  schoolName    String   @map("school_name") @db.VarChar(200)
+  gradeLevel    String   @map("grade_level") @db.VarChar(50)
+  /// Guardian details: all three or none (required when the student is under 18).
+  guardianName  String?  @map("guardian_name") @db.VarChar(120)
+  guardianEmail String?  @map("guardian_email") @db.VarChar(254)
+  guardianPhone String?  @map("guardian_phone") @db.VarChar(30)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("student_profiles")
+}
+
+/// A student's application to join the programme. One per student.
+model StudentApplication {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  studentId        String            @unique @map("student_id") @db.Uuid
+  /// A PREFERENCE only. Access is decided by the admin (an enrollment).
+  preferredTrackId String?           @map("preferred_track_id") @db.Uuid
+  whyJoin          String            @map("why_join") @db.VarChar(2000)
+  hopeToLearn      String            @map("hope_to_learn") @db.VarChar(2000)
+  stemExperience   String?           @map("stem_experience") @db.VarChar(2000)
+  status           ApplicationStatus @default(PENDING)
+  submittedAt      DateTime          @default(now()) @map("submitted_at") @db.Timestamptz(3)
+  reviewedById     String?           @map("reviewed_by_id") @db.Uuid
+  reviewedAt       DateTime?         @map("reviewed_at") @db.Timestamptz(3)
+  /// Private note for admins. NEVER shown to the student.
+  decisionNote     String?           @map("decision_note") @db.VarChar(1000)
+  // --- consent record: what was agreed, when, and under which policy wording
+  consentAcceptedAt DateTime         @map("consent_accepted_at") @db.Timestamptz(3)
+  guardianConsentAt DateTime?        @map("guardian_consent_at") @db.Timestamptz(3)
+  consentVersion    String           @map("consent_version") @db.VarChar(20)
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  student        User        @relation("ApplicationStudent", fields: [studentId], references: [id], onDelete: Restrict)
+  preferredTrack Track?      @relation(fields: [preferredTrackId], references: [id], onDelete: Restrict)
+  reviewedBy     User?       @relation("StudentApplicationReviewedBy", fields: [reviewedById], references: [id], onDelete: Restrict)
+  enrollment     Enrollment?
+
+  @@index([status, submittedAt])
+  @@index([preferredTrackId])
+  @@map("student_applications")
+}
+
+/// "This student is in this cohort." The ONLY thing that unlocks a course.
+/// A student can have at most ONE active enrollment (the database enforces it).
+model Enrollment {
+  id            String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  studentId     String           @map("student_id") @db.Uuid
+  cohortId      String           @map("cohort_id") @db.Uuid
+  /// The application that led to this enrollment (null for later transfers).
+  applicationId String?          @unique @map("application_id") @db.Uuid
+  status        EnrollmentStatus @default(ACTIVE)
+  enrolledAt    DateTime         @default(now()) @map("enrolled_at") @db.Timestamptz(3)
+  endedAt       DateTime?        @map("ended_at") @db.Timestamptz(3)
+  createdById   String?          @map("created_by_id") @db.Uuid
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  student     User                @relation("EnrollmentStudent", fields: [studentId], references: [id], onDelete: Restrict)
+  cohort      Cohort              @relation(fields: [cohortId], references: [id], onDelete: Restrict)
+  application StudentApplication? @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  createdBy   User?               @relation("EnrollmentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([cohortId, status])
+  @@index([studentId, status])
+  @@map("enrollments")
 }

@@ -21,7 +21,8 @@ export const cohortSelect = {
   createdAt: true,
   updatedAt: true,
   course: { select: { id: true, title: true, track: { select: { id: true, name: true } } } },
-  _count: { select: { instructors: true } },
+  // Instructors teaching it, and students currently enrolled (active enrollments only).
+  _count: { select: { instructors: true, enrollments: { where: { status: 'ACTIVE' } } } },
 } satisfies Prisma.CohortSelect;
 
 export type CohortRow = Prisma.CohortGetPayload<{ select: typeof cohortSelect }>;
@@ -37,6 +38,7 @@ export interface CohortView {
   course: { id: string; title: string };
   track: { id: string; name: string };
   instructorCount: number;
+  enrolledCount: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -54,6 +56,7 @@ export function toCohortView(row: CohortRow, today: string): CohortView {
     course: { id: row.course.id, title: row.course.title },
     track: { id: row.course.track.id, name: row.course.track.name },
     instructorCount: row._count.instructors,
+    enrolledCount: row._count.enrollments,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

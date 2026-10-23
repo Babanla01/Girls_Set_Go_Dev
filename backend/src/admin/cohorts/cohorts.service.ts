@@ -6,6 +6,7 @@
  *  - A cohort follows ONE course (its track comes from the course).
  *  - It cannot be created inside an archived course, nor restored while its
  *    course is archived. Archived cohorts cannot be edited (restore first).
+ *  - A cohort cannot be archived while students are enrolled in it.
  *  - Instructors are assigned to cohorts: not suspended ones, and the
  *    database itself refuses anyone who is not an instructor.
  *  - Removing an assignment takes effect on the instructor's very next
@@ -21,7 +22,7 @@ import type { DbClient } from '../../common/types/db-client';
 import type { AuthenticatedUser, RequestContext } from '../../auth/auth.types';
 import { cleanLabel, labelKey, parseCalendarDate, todayInProgrammeZone, formatCalendarDate } from '../../catalog/catalog.util';
 import { CohortView, cohortSelect, toCohortView } from '../../catalog/cohort.view';
-import { lockCourse } from '../../catalog/row-lock';
+import { lockCohort, lockCourse } from '../../catalog/row-lock';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { AssignInstructorDto } from './dto/assign-instructor.dto';
 import type { CreateCohortDto } from './dto/create-cohort.dto';
@@ -196,9 +197,17 @@ export class CohortsService {
 
   async archive(admin: AuthenticatedUser, id: string, context: RequestContext): Promise<{ cohort: CohortView }> {
     const row = await this.prisma.$transaction(async (tx) => {
+      await lockCohort(tx, id); // take turns with anyone being accepted into it right now
       const current = await tx.cohort.findUnique({ where: { id }, select: { status: true } });
       if (!current) throw new NotFoundException('Cohort not found.');
       if (current.status === CohortStatus.ARCHIVED) throw new ConflictException('This cohort is already archived.');
+
+      const enrolled = await tx.enrollment.count({ where: { cohortId: id, status: 'ACTIVE' } });
+      if (enrolled > 0) {
+        throw new ConflictException(
+          `This cohort still has ${enrolled} enrolled student${enrolled === 1 ? '' : 's'}. Move or withdraw ${enrolled === 1 ? 'her' : 'them'} first.`,
+        );
+      }
 
       const updated = await tx.cohort.update({ where: { id }, data: { status: CohortStatus.ARCHIVED }, select: cohortSelect });
       await this.audit.record(
