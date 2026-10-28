@@ -22,12 +22,13 @@ export const branding = {
   supportEmail: 'support@girlssetgo.org',
 
   /**
-   * The timezone the programme runs in. "Is this cohort running today?" is
-   * answered using the calendar date IN THIS ZONE (a student in Lagos should
-   * not see a cohort start an hour late because the server clock is in UTC).
-   * Use an IANA name, e.g. 'Africa/Lagos'.
+   * The timezone the programme runs in (the design uses Central Time).
+   * "Is this cohort running today?" and deadline rules such as "5:00 PM on
+   * class day + 3" are worked out in THIS zone, daylight saving included.
+   * Every timestamp is still STORED in UTC; this zone is only used when a
+   * calendar day or a clock time has to be decided. Use an IANA name.
    */
-  timezone: 'Africa/Lagos',
+  timezone: 'America/Chicago',
 
   /**
    * Wording used by the product. If an organisation prefers "Programme"

@@ -5,10 +5,12 @@
  *
  * This is the first real use of the ownership rules from Batch 3:
  *   "instructor only sees assigned learning areas".
- * Someone else's cohort looks exactly like a cohort that does not exist
- * (404), so an instructor cannot even discover which cohorts exist.
+ * A cohort that does not exist answers 404 ("not found"). A cohort that exists
+ * but is NOT assigned to this instructor answers 403 ("not allowed"), which
+ * the design shows as an "Unauthorized" screen. The check runs on every request.
  */
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { CohortStatus } from '@prisma/client';
 
 import { AuthenticatedUser } from '../auth/auth.types';
 import { PolicyService } from '../auth/policy/policy.service';
@@ -32,7 +34,11 @@ export class InstructorCohortsService {
   async listMine(user: AuthenticatedUser, query: ListMyCohortsQuery): Promise<Paginated<CohortView>> {
     const today = todayInProgrammeZone();
     // The filter on "instructors: some" IS the ownership rule for lists.
-    const where = { status: query.status, instructors: { some: { instructorId: user.id } } };
+    // No ?status= means "current" cohorts: planned and running (not closed).
+    const where = {
+      status: query.status ?? { in: [CohortStatus.PLANNED, CohortStatus.ACTIVE] },
+      instructors: { some: { instructorId: user.id } },
+    };
 
     const [total, rows] = await Promise.all([
       this.prisma.cohort.count({ where }),
@@ -49,12 +55,9 @@ export class InstructorCohortsService {
 
   /** One cohort - only if it is assigned to this instructor. */
   async getMine(user: AuthenticatedUser, cohortId: string) {
-    if (!(await this.policy.can(user, COHORT_VIEW_ACTION, cohortId))) {
-      throw new NotFoundException('Cohort not found.'); // same answer as a cohort that does not exist
-    }
-
     const row = await this.prisma.cohort.findUnique({ where: { id: cohortId }, select: cohortSelect });
     if (!row) throw new NotFoundException('Cohort not found.');
+    await this.assertAssigned(user, cohortId);
 
     // Co-instructors: names only (no emails or other details).
     const colleagues = await this.prisma.cohortInstructor.findMany({
@@ -72,16 +75,16 @@ export class InstructorCohortsService {
   /**
    * The students currently enrolled in one of MY cohorts - NAMES ONLY (no
    * emails, phone numbers, dates of birth or guardian details). Someone else's
-   * cohort answers "not found", exactly like one that does not exist.
+   * cohort answers 403; a cohort that does not exist answers 404.
    */
   async listStudents(
     user: AuthenticatedUser,
     cohortId: string,
     query: PaginationQueryDto,
   ): Promise<Paginated<{ id: string; fullName: string; enrolledAt: Date }>> {
-    if (!(await this.policy.can(user, COHORT_VIEW_ACTION, cohortId))) {
-      throw new NotFoundException('Cohort not found.');
-    }
+    const exists = await this.prisma.cohort.count({ where: { id: cohortId } });
+    if (exists === 0) throw new NotFoundException('Cohort not found.');
+    await this.assertAssigned(user, cohortId);
 
     const where = { cohortId, status: 'ACTIVE' as const };
     const [total, rows] = await Promise.all([
@@ -99,5 +102,12 @@ export class InstructorCohortsService {
       total,
       query,
     );
+  }
+
+  /** 403 unless an admin assigned this cohort to this instructor. */
+  private async assertAssigned(user: AuthenticatedUser, cohortId: string): Promise<void> {
+    if (!(await this.policy.can(user, COHORT_VIEW_ACTION, cohortId))) {
+      throw new ForbiddenException('You do not have access to this cohort.');
+    }
   }
 }

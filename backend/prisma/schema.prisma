@@ -74,9 +74,12 @@ enum CourseStatus {
   ARCHIVED
 }
 
+/// PLANNED = created but not started (students can already be accepted into it);
+/// ACTIVE = running; CLOSED = finished or retired (nobody can be added or edited).
 enum CohortStatus {
+  PLANNED
   ACTIVE
-  ARCHIVED
+  CLOSED
 }
 
 /// Where a student's application stands. Separate from the account status and
@@ -87,8 +90,11 @@ enum ApplicationStatus {
   DECLINED
 }
 
+/// ACTIVE = in the cohort now; COMPLETED = finished the course (content stays readable);
+/// TRANSFERRED = moved to another cohort or track; WITHDRAWN = left the programme.
 enum EnrollmentStatus {
   ACTIVE
+  COMPLETED
   TRANSFERRED
   WITHDRAWN
 }
@@ -316,7 +322,7 @@ model Cohort {
   endsOn      DateTime     @map("ends_on") @db.Date
   /// Maximum students (optional). Enforced when students are accepted.
   capacity    Int?
-  status      CohortStatus @default(ACTIVE)
+  status      CohortStatus @default(PLANNED)
   createdById String?      @map("created_by_id") @db.Uuid
   createdAt   DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)

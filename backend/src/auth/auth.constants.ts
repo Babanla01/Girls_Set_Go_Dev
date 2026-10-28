@@ -6,6 +6,8 @@
  */
 import { Role } from '@prisma/client';
 
+import { branding } from '../config/branding.config';
+
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -19,8 +21,10 @@ export const SESSION_ABSOLUTE_MS = 30 * DAY;
 export const SESSION_TOUCH_INTERVAL_MS = 5 * MINUTE;
 
 // --- One-time links ---------------------------------------------------------
-export const INVITE_LINK_TTL_MS = 7 * DAY;
-export const RESET_LINK_TTL_MS = 1 * HOUR;
+/** An instructor's invite link works for 72 hours (3 days). */
+export const INVITE_LINK_TTL_MS = 3 * DAY;
+/** A password-reset link works for 30 minutes. */
+export const RESET_LINK_TTL_MS = 30 * MINUTE;
 /** Email verification links expire after 24 hours. */
 export const VERIFY_LINK_TTL_MS = 1 * DAY;
 
@@ -34,7 +38,7 @@ export const LOGIN_PAUSE_SECONDS = 15 * 60;
 export const SENSITIVE_ROUTE_LIMIT = { limit: 5, ttl: MINUTE };
 
 // --- Passwords ----------------------------------------------------------------
-export const PASSWORD_MIN_LENGTH = 10;
+export const PASSWORD_MIN_LENGTH = 12;
 export const PASSWORD_MAX_LENGTH = 128;
 
 // --- Cookies ------------------------------------------------------------------
@@ -56,6 +60,11 @@ export const PORTALS = Object.keys(PORTAL_ROLES) as Portal[];
 // --- Messages -------------------------------------------------------------------
 /** ONE message for every kind of failed login, so nothing is revealed. */
 export const GENERIC_LOGIN_ERROR = 'Email or password is incorrect.';
+/**
+ * Shown ONLY after the correct password was typed for a suspended account
+ * (someone who does not know the password never learns the account exists).
+ */
+export const ACCOUNT_PAUSED_MESSAGE = `Your account is paused. Please contact ${branding.supportEmail} for help.`;
 export const INVALID_LINK_ERROR = 'This link is invalid or has expired. Please request a new one.';
 /** Forgot-password always answers this, whether or not the email exists. */
 export const RESET_REQUESTED_MESSAGE =

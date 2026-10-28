@@ -7,6 +7,9 @@
  *     mark the application accepted + record who/when + create the enrollment
  *     (which is what unlocks the course) + write the audit entry + queue the
  *     acceptance email. If any step fails, none of them happen.
+ *  Pressing Accept twice is SAFE: the second press finds the application
+ *  already accepted into that same cohort and simply returns the same result
+ *  (still exactly one enrollment, and no second email).
  *  Two safety locks stop real-life races:
  *     - the COHORT is locked while seats are counted, so two admins accepting
  *       two girls into the last seat cannot both succeed;
@@ -17,7 +20,7 @@
  */
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AccountStatus, ApplicationStatus, CohortStatus, CourseStatus, Prisma } from '@prisma/client';
+import { AccountStatus, ApplicationStatus, CohortStatus, CourseStatus, EnrollmentStatus, Prisma } from '@prisma/client';
 
 import { AuditService } from '../../common/audit/audit.service';
 import { OutboxEmail, OutboxService } from '../../common/outbox/outbox.service';
@@ -107,9 +110,24 @@ export class ApplicationsService {
 
         const application = await tx.studentApplication.findUnique({
           where: { id },
-          select: { status: true, student: { select: { id: true, fullName: true, email: true, status: true } } },
+          select: {
+            status: true,
+            enrollment: { select: { id: true, enrolledAt: true, cohortId: true, status: true } },
+            student: { select: { id: true, fullName: true, email: true, status: true } },
+          },
         });
         if (!application) throw new NotFoundException('Application not found.');
+
+        // A repeated click (or a retry after a slow network): already accepted into
+        // THIS cohort and still enrolled -> return the same result, change nothing.
+        if (
+          application.status === ApplicationStatus.ACCEPTED &&
+          application.enrollment?.status === EnrollmentStatus.ACTIVE &&
+          application.enrollment.cohortId === dto.cohortId
+        ) {
+          const existing = application.enrollment;
+          return { enrollment: { id: existing.id, enrolledAt: existing.enrolledAt }, cohortId: dto.cohortId, email: null };
+        }
         if (application.status !== ApplicationStatus.PENDING) throw new ConflictException(ALREADY_DECIDED);
         if (application.student.status === AccountStatus.SUSPENDED) {
           throw new ConflictException("This student's account is suspended, so she cannot be accepted.");
@@ -128,8 +146,8 @@ export class ApplicationsService {
           },
         });
         if (!cohort) throw new NotFoundException('Cohort not found.');
-        if (cohort.status === CohortStatus.ARCHIVED) {
-          throw new ConflictException('Students cannot be accepted into an archived cohort.');
+        if (cohort.status === CohortStatus.CLOSED) {
+          throw new ConflictException('Students cannot be accepted into a closed cohort.');
         }
         if (cohort.course.status === CourseStatus.ARCHIVED) {
           throw new ConflictException('Students cannot be accepted into a cohort of an archived course.');
@@ -137,7 +155,7 @@ export class ApplicationsService {
 
         // Is there a seat left? (Safe: the cohort is locked, so nobody else can take it meanwhile.)
         if (cohort.capacity !== null) {
-          const taken = await tx.enrollment.count({ where: { cohortId: cohort.id, status: 'ACTIVE' } });
+          const taken = await tx.enrollment.count({ where: { cohortId: cohort.id, status: EnrollmentStatus.ACTIVE } });
           if (taken >= cohort.capacity) throw new ConflictException('This cohort is full.');
         }
 
@@ -195,7 +213,7 @@ export class ApplicationsService {
         return { enrollment, cohortId: cohort.id, email: message };
       });
 
-      this.outbox.previewInDevelopment(email);
+      if (email) this.outbox.previewInDevelopment(email); // null on a repeated click: no second email
 
       const [application, cohort] = await Promise.all([
         this.prisma.studentApplication.findUniqueOrThrow({ where: { id }, select: applicationListSelect }),

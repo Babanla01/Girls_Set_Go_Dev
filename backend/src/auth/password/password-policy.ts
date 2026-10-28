@@ -5,7 +5,8 @@
  * problems (an empty list means the password is acceptable).
  *
  * Rules:
- *  - at least 10 characters (and a sane maximum)
+ *  - at least 12 characters (and a sane maximum)
+ *  - not the same as the person's email address (when the email is known)
  *  - at least one letter, one number and one symbol
  *  - not a very common password (even disguised, like "P@ssw0rd123!")
  */
@@ -32,7 +33,7 @@ function reduceToLetters(password: string): string[] {
   return [lettersOnly, decoded];
 }
 
-export function checkPasswordPolicy(password: string): string[] {
+export function checkPasswordPolicy(password: string, email?: string): string[] {
   const problems: string[] = [];
 
   if (password.length < PASSWORD_MIN_LENGTH) {
@@ -40,6 +41,9 @@ export function checkPasswordPolicy(password: string): string[] {
   }
   if (password.length > PASSWORD_MAX_LENGTH) {
     problems.push(`Password must be at most ${PASSWORD_MAX_LENGTH} characters long.`);
+  }
+  if (email && password.trim().toLowerCase() === email.trim().toLowerCase()) {
+    problems.push('Password cannot be the same as your email address.');
   }
   if (!/\p{L}/u.test(password)) {
     problems.push('Password must include at least one letter.');

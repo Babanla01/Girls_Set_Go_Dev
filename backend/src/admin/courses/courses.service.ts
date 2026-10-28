@@ -226,10 +226,10 @@ export class CoursesService {
   }
 
   private async refuseIfActiveCohorts(tx: DbClient, courseId: string, verb: string): Promise<void> {
-    const active = await tx.cohort.count({ where: { courseId, status: { not: 'ARCHIVED' } } });
+    const active = await tx.cohort.count({ where: { courseId, status: { not: 'CLOSED' } } });
     if (active > 0) {
       throw new ConflictException(
-        `This course still has ${active} active cohort${active === 1 ? '' : 's'}, so it cannot be ${verb}. Archive ${active === 1 ? 'it' : 'them'} first.`,
+        `This course still has ${active} open cohort${active === 1 ? '' : 's'}, so it cannot be ${verb}. Close ${active === 1 ? 'it' : 'them'} first.`,
       );
     }
   }

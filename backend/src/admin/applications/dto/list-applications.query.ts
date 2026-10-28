@@ -2,7 +2,8 @@
  * list-applications.query.ts
  * ---------------------------------------------------------------------------
  *   ?status=PENDING&preferredTrackId=<uuid>&search=ada&from=2026-10-01&to=2026-10-31
- *   &sortBy=submittedAt&sortDir=desc&page=1&pageSize=20
+ *   &sortBy=submittedAt&sortDir=asc&page=1&pageSize=20
+ *   (default order: OLDEST first, so the longest-waiting applicant is on top)
  */
 import { Transform, Type } from 'class-transformer';
 import { IsDate, IsEnum, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
@@ -46,5 +47,5 @@ export class ListApplicationsQuery extends PaginationQueryDto {
 
   @IsOptional()
   @IsIn(['asc', 'desc'])
-  sortDir: 'asc' | 'desc' = 'desc';
+  sortDir: 'asc' | 'desc' = 'asc';
 }

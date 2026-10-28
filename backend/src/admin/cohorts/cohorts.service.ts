@@ -4,9 +4,12 @@
  * The rules for how admins manage cohorts and who teaches them.
  *
  *  - A cohort follows ONE course (its track comes from the course).
- *  - It cannot be created inside an archived course, nor restored while its
- *    course is archived. Archived cohorts cannot be edited (restore first).
- *  - A cohort cannot be archived while students are enrolled in it.
+ *  - A cohort has three statuses: PLANNED (not started), ACTIVE (running) and
+ *    CLOSED (finished or retired). Admins move it between PLANNED and ACTIVE
+ *    by hand; CLOSED has its own action ("archive" in the URL).
+ *  - It cannot be created inside an archived course, nor reopened while its
+ *    course is archived. Closed cohorts cannot be edited (reopen first).
+ *  - A cohort cannot be closed while students are enrolled in it.
  *  - Instructors are assigned to cohorts: not suspended ones, and the
  *    database itself refuses anyone who is not an instructor.
  *  - Removing an assignment takes effect on the instructor's very next
@@ -137,7 +140,13 @@ export class CohortsService {
     dto: UpdateCohortDto,
     context: RequestContext,
   ): Promise<{ cohort: CohortView }> {
-    if (dto.name === undefined && dto.startsOn === undefined && dto.endsOn === undefined && dto.capacity === undefined) {
+    if (
+      dto.name === undefined &&
+      dto.startsOn === undefined &&
+      dto.endsOn === undefined &&
+      dto.capacity === undefined &&
+      dto.status === undefined
+    ) {
       throw new BadRequestException('Nothing to update.');
     }
 
@@ -148,8 +157,8 @@ export class CohortsService {
           select: { name: true, startsOn: true, endsOn: true, capacity: true, status: true },
         });
         if (!current) throw new NotFoundException('Cohort not found.');
-        if (current.status === CohortStatus.ARCHIVED) {
-          throw new ConflictException('This cohort is archived. Restore it before editing.');
+        if (current.status === CohortStatus.CLOSED) {
+          throw new ConflictException('This cohort is closed. Reopen it before editing.');
         }
 
         // Work out the dates as they WOULD be, and check them together.
@@ -178,6 +187,11 @@ export class CohortsService {
           changed.push('capacity');
         }
 
+        if (dto.status !== undefined && dto.status !== current.status) {
+          data.status = dto.status; // PLANNED <-> ACTIVE only (the DTO refuses CLOSED)
+          changed.push('status');
+        }
+
         if (changed.length === 0) return tx.cohort.findUniqueOrThrow({ where: { id }, select: cohortSelect });
 
         const updated = await tx.cohort.update({ where: { id }, data, select: cohortSelect });
@@ -193,14 +207,14 @@ export class CohortsService {
     }
   }
 
-  // ---------------------------------------------------------------- archive
+  // ------------------------------------------------------- close / reopen
 
   async archive(admin: AuthenticatedUser, id: string, context: RequestContext): Promise<{ cohort: CohortView }> {
     const row = await this.prisma.$transaction(async (tx) => {
       await lockCohort(tx, id); // take turns with anyone being accepted into it right now
       const current = await tx.cohort.findUnique({ where: { id }, select: { status: true } });
       if (!current) throw new NotFoundException('Cohort not found.');
-      if (current.status === CohortStatus.ARCHIVED) throw new ConflictException('This cohort is already archived.');
+      if (current.status === CohortStatus.CLOSED) throw new ConflictException('This cohort is already closed.');
 
       const enrolled = await tx.enrollment.count({ where: { cohortId: id, status: 'ACTIVE' } });
       if (enrolled > 0) {
@@ -209,7 +223,7 @@ export class CohortsService {
         );
       }
 
-      const updated = await tx.cohort.update({ where: { id }, data: { status: CohortStatus.ARCHIVED }, select: cohortSelect });
+      const updated = await tx.cohort.update({ where: { id }, data: { status: CohortStatus.CLOSED }, select: cohortSelect });
       await this.audit.record(
         { actorId: admin.id, action: 'cohort.archived', entityType: 'cohort', entityId: id, ipAddress: context.ipAddress },
         tx,
@@ -225,15 +239,17 @@ export class CohortsService {
       if (!pre) throw new NotFoundException('Cohort not found.');
       await lockCourse(tx, pre.courseId); // take turns with anyone archiving the course
 
-      const current = await tx.cohort.findUniqueOrThrow({ where: { id }, select: { status: true } });
-      if (current.status !== CohortStatus.ARCHIVED) throw new ConflictException('This cohort is not archived.');
+      const current = await tx.cohort.findUniqueOrThrow({ where: { id }, select: { status: true, startsOn: true } });
+      if (current.status !== CohortStatus.CLOSED) throw new ConflictException('This cohort is not closed.');
 
       const course = await tx.course.findUniqueOrThrow({ where: { id: pre.courseId }, select: { status: true } });
       if (course.status === CourseStatus.ARCHIVED) {
         throw new ConflictException('The course this cohort follows is archived. Restore the course first.');
       }
 
-      const updated = await tx.cohort.update({ where: { id }, data: { status: CohortStatus.ACTIVE }, select: cohortSelect });
+      // Reopened: PLANNED if it has not started yet (in the programme's timezone), otherwise ACTIVE.
+      const reopenedAs = formatCalendarDate(current.startsOn) > todayInProgrammeZone() ? CohortStatus.PLANNED : CohortStatus.ACTIVE;
+      const updated = await tx.cohort.update({ where: { id }, data: { status: reopenedAs }, select: cohortSelect });
       await this.audit.record(
         { actorId: admin.id, action: 'cohort.restored', entityType: 'cohort', entityId: id, ipAddress: context.ipAddress },
         tx,
@@ -255,8 +271,8 @@ export class CohortsService {
       return await this.prisma.$transaction(async (tx) => {
         const cohort = await tx.cohort.findUnique({ where: { id: cohortId }, select: { status: true } });
         if (!cohort) throw new NotFoundException('Cohort not found.');
-        if (cohort.status === CohortStatus.ARCHIVED) {
-          throw new ConflictException('Instructors cannot be assigned to an archived cohort.');
+        if (cohort.status === CohortStatus.CLOSED) {
+          throw new ConflictException('Instructors cannot be assigned to a closed cohort.');
         }
 
         const instructor = await tx.user.findFirst({

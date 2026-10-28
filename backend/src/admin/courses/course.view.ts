@@ -11,8 +11,8 @@ export const courseSelect = {
   createdAt: true,
   updatedAt: true,
   track: { select: { id: true, name: true } },
-  // Cohorts still in use (not archived) - what blocks unpublishing and archiving.
-  _count: { select: { cohorts: { where: { status: { not: 'ARCHIVED' } } } } },
+  // Cohorts still in use (planned or active, not closed) - what blocks unpublishing and archiving.
+  _count: { select: { cohorts: { where: { status: { not: 'CLOSED' } } } } },
 } satisfies Prisma.CourseSelect;
 
 export type CourseRow = Prisma.CourseGetPayload<{ select: typeof courseSelect }>;

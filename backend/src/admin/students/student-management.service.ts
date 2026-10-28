@@ -244,8 +244,8 @@ export class StudentManagementService {
         select: { id: true, status: true, capacity: true, course: { select: { status: true } } },
       });
       if (!target) throw new NotFoundException('Cohort not found.');
-      if (target.status === CohortStatus.ARCHIVED) {
-        throw new ConflictException('Students cannot be moved into an archived cohort.');
+      if (target.status === CohortStatus.CLOSED) {
+        throw new ConflictException('Students cannot be moved into a closed cohort.');
       }
       if (target.course.status === CourseStatus.ARCHIVED) {
         throw new ConflictException('Students cannot be moved into a cohort of an archived course.');

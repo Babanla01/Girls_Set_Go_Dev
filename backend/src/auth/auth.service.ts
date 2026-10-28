@@ -6,7 +6,9 @@
  *
  * Security principles used throughout:
  *  - FAILED LOGINS ALL LOOK THE SAME: wrong password, unknown email, wrong
- *    login door, invited or suspended account -> the identical error.
+ *    login door, invited account -> the identical error.
+ *    The ONE exception: a suspended account that typed the CORRECT password
+ *    gets a clear "account paused" message (nobody else can ever see it).
  *  - "FORGOT PASSWORD" ALWAYS ANSWERS THE SAME and takes the same time, so it
  *    cannot be used to discover which emails are registered.
  *  - Changes that must happen together (use up the link + set the password +
@@ -14,6 +16,7 @@
  */
 import {
   BadRequestException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Injectable,
@@ -29,6 +32,7 @@ import { normalizeEmail } from '../common/utils/normalize-email';
 import type { Env } from '../config/env.validation';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  ACCOUNT_PAUSED_MESSAGE,
   GENERIC_LOGIN_ERROR,
   INVALID_LINK_ERROR,
   PORTAL_ROLES,
@@ -87,6 +91,21 @@ export class AuthService {
     const passwordOk = await this.passwords.verify(user?.passwordHash ?? null, dto.password);
     const roleMatches = user?.role === PORTAL_ROLES[dto.portal];
     const accountActive = user?.status === AccountStatus.ACTIVE;
+
+    // 2b) Correct password + right door, but the account is suspended: say so
+    //     plainly. Only someone who knows the password can ever see this, so
+    //     it reveals nothing to a stranger. It is not a "failed attempt".
+    if (user && passwordOk && roleMatches && user.status === AccountStatus.SUSPENDED) {
+      await this.audit.record({
+        actorId: user.id,
+        action: 'auth.login_blocked_suspended',
+        entityType: 'user',
+        entityId: user.id,
+        metadata: { portal: dto.portal },
+        ipAddress: context.ipAddress,
+      });
+      throw new ForbiddenException(ACCOUNT_PAUSED_MESSAGE);
+    }
 
     if (!user || !passwordOk || !roleMatches || !accountActive) {
       // The REASON is recorded privately for admins; the visitor sees only the generic error.
@@ -228,6 +247,7 @@ export class AuthService {
 
       const user = await tx.user.findUnique({ where: { id: userId }, select: { id: true, email: true, status: true } });
       if (!user || user.status !== AccountStatus.ACTIVE) throw new BadRequestException(INVALID_LINK_ERROR);
+      this.assertPasswordNotEmail(newPassword, user.email); // throws -> the link is NOT used up
 
       await tx.user.update({ where: { id: userId }, data: { passwordHash: hash } });
       await this.sessions.revokeAllForUser(userId, tx); // sign out everywhere
@@ -255,8 +275,9 @@ export class AuthService {
       const userId = await this.tokens.claim(token, AuthTokenType.INVITE, tx);
       if (!userId) throw new BadRequestException(INVALID_LINK_ERROR);
 
-      const user = await tx.user.findUnique({ where: { id: userId }, select: { id: true, status: true } });
+      const user = await tx.user.findUnique({ where: { id: userId }, select: { id: true, email: true, status: true } });
       if (!user || user.status !== AccountStatus.INVITED) throw new BadRequestException(INVALID_LINK_ERROR);
+      this.assertPasswordNotEmail(newPassword, user.email); // throws -> the link is NOT used up
 
       await tx.user.update({
         where: { id: userId },
@@ -282,6 +303,16 @@ export class AuthService {
     const problems = this.passwords.validatePolicy(password);
     if (problems.length > 0) throw new BadRequestException(problems);
     return this.passwords.hash(password);
+  }
+
+  /**
+   * "Password must not be your email" can only be checked once we know whose
+   * link this is. It runs inside the transaction, so a refusal rolls back and
+   * the one-time link stays usable for another try.
+   */
+  private assertPasswordNotEmail(password: string, email: string): void {
+    const problems = this.passwords.validatePolicy(password, email);
+    if (problems.length > 0) throw new BadRequestException(problems);
   }
 
   /** Builds a link into the website, e.g. https://learn.example.org/reset-password?token=... */

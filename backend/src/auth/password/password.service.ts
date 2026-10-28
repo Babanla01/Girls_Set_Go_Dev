@@ -35,9 +35,12 @@ export class PasswordService implements OnModuleInit {
     this.dummyHash = await argon2.hash(randomBytes(16).toString('hex'), ARGON2_OPTIONS);
   }
 
-  /** Returns a list of plain-English problems; empty means the password is fine. */
-  validatePolicy(password: string): string[] {
-    return checkPasswordPolicy(password);
+  /**
+   * Returns a list of plain-English problems; empty means the password is fine.
+   * Pass the person's email when you have it, so "password = email" is refused.
+   */
+  validatePolicy(password: string, email?: string): string[] {
+    return checkPasswordPolicy(password, email);
   }
 
   hash(password: string): Promise<string> {
