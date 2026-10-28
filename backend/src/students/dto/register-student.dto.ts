@@ -38,9 +38,9 @@ const labelOrUndefined = ({ value }: { value: unknown }) =>
 const label = ({ value }: { value: unknown }) => (typeof value === 'string' ? cleanLabel(value) : value);
 const trimmed = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
-/** 7-30 characters: digits, spaces, dashes, brackets, optional leading +. */
-const PHONE_PATTERN = /^\+?[0-9][0-9\s\-()]{5,28}$/;
-const PHONE_MESSAGE = 'Please enter a valid phone number.';
+/** 7-30 characters: digits, spaces, dashes, brackets, optional leading +. Shared with the admin "edit student" form. */
+export const PHONE_PATTERN = /^\+?[0-9][0-9\s\-()]{5,28}$/;
+export const PHONE_MESSAGE = 'Please enter a valid phone number.';
 
 export class RegisterStudentDto {
   // --- personal --------------------------------------------------------------

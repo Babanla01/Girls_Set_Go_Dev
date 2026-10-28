@@ -22,6 +22,12 @@ const commaList = z
       .filter((item) => item.length > 0),
   );
 
+/** Optional text: leaving it blank in ".env" counts as "not set". */
+const optionalText = z
+  .string()
+  .optional()
+  .transform((value) => (value === undefined || value.trim() === '' ? undefined : value.trim()));
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 
@@ -57,6 +63,20 @@ const envSchema = z.object({
   LOG_LEVEL: z
     .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'])
     .default('info'),
+
+  // --- Real email sending (all optional: with no SMTP_HOST, emails just stay in
+  // the outbox and, in development, their links are printed in the terminal). ---
+  SMTP_HOST: optionalText,
+  SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  // "true" for providers that use a secure connection from the start (usually port 465).
+  SMTP_SECURE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  SMTP_USER: optionalText,
+  SMTP_PASSWORD: optionalText,
+  // The "From" of every email, e.g.  Girls Set Go <no-reply@yourdomain.org>
+  MAIL_FROM: optionalText,
 });
 
 /** The validated, correctly-typed settings object used across the app. */
@@ -83,6 +103,17 @@ export function validateEnv(raw: Record<string, unknown>): Env {
   ) {
     throw new Error(
       'Invalid environment configuration:\n  - SESSION_SECRET: still contains the example placeholder',
+    );
+  }
+
+  // Mail settings must be complete, or the email sender would fail later in a confusing way.
+  const { SMTP_HOST, MAIL_FROM, SMTP_USER, SMTP_PASSWORD } = result.data;
+  if (SMTP_HOST && !MAIL_FROM) {
+    throw new Error('Invalid environment configuration:\n  - MAIL_FROM: required when SMTP_HOST is set');
+  }
+  if (Boolean(SMTP_USER) !== Boolean(SMTP_PASSWORD)) {
+    throw new Error(
+      'Invalid environment configuration:\n  - SMTP_USER and SMTP_PASSWORD: give both, or neither',
     );
   }
 

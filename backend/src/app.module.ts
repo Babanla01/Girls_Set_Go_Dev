@@ -18,6 +18,7 @@ import { AuthModule } from './auth/auth.module';
 import { AuthGuard } from './auth/guards/auth.guard';
 import { RolesGuard } from './auth/guards/roles.guard';
 import { AuditModule } from './common/audit/audit.module';
+import { EmailModule } from './common/email/email.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { OutboxModule } from './common/outbox/outbox.module';
 import { OriginGuard } from './common/security/origin.guard';
@@ -28,6 +29,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { PublicModule } from './public/public.module';
 import { RedisModule } from './redis/redis.module';
 import { RedisService } from './redis/redis.service';
+import { RetentionModule } from './retention/retention.module';
 import { StudentsModule } from './students/students.module';
 
 @Module({
@@ -97,6 +99,10 @@ import { StudentsModule } from './students/students.module';
     PrismaModule,
     AuditModule,
     OutboxModule,
+    // Sending queued emails (run by "npm run email:send") and the nightly
+    // removal of declined applicants' data (run by "npm run retention:run").
+    EmailModule,
+    RetentionModule,
 
     // 6) Feature modules
     AuthModule,

@@ -3,8 +3,8 @@
  * ---------------------------------------------------------------------------
  * Everything an administrator does through the API lives under this module.
  * So far: instructors, the audit log, tracks, courses, cohorts, student
- * applications and a read-only student list. Later batches add student
- * management and announcements here.
+ * applications and students (list, detail, edit, suspend, withdraw, move).
+ * Later batches add announcements here.
  */
 import { Module } from '@nestjs/common';
 
@@ -19,6 +19,7 @@ import { CoursesController } from './courses/courses.controller';
 import { CoursesService } from './courses/courses.service';
 import { InstructorsController } from './instructors/instructors.controller';
 import { InstructorsService } from './instructors/instructors.service';
+import { StudentManagementService } from './students/student-management.service';
 import { AdminStudentsController } from './students/students.controller';
 import { AdminStudentsService } from './students/students.service';
 import { TracksController } from './tracks/tracks.controller';
@@ -43,6 +44,7 @@ import { TracksService } from './tracks/tracks.service';
     CohortsService,
     ApplicationsService,
     AdminStudentsService,
+    StudentManagementService,
   ],
 })
 export class AdminModule {}

@@ -29,6 +29,11 @@ import { cohortSelect, toCohortView } from '../../catalog/cohort.view';
 import { lockCohort } from '../../catalog/row-lock';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
+  isRemovedAccountEmail,
+  REMOVED_ACCOUNT_EMAIL_DOMAIN,
+  REMOVED_REOPEN_MESSAGE,
+} from '../../retention/retention.constants';
+import {
   ApplicationSummary,
   applicationDetailSelect,
   applicationListSelect,
@@ -262,16 +267,30 @@ export class ApplicationsService {
 
   // ------------------------------------------------------------------ reopen
 
-  /** A declined application can go back to pending (for example after a mistake). */
+  /**
+   * A declined application can go back to pending (for example after a mistake) -
+   * unless the applicant's personal data has already been removed (two months
+   * after the decision), because there is nothing left to review.
+   */
   async reopen(admin: AuthenticatedUser, id: string, context: RequestContext): Promise<{ application: ApplicationSummary }> {
     await this.prisma.$transaction(async (tx) => {
       const reopened = await tx.studentApplication.updateMany({
-        where: { id, status: ApplicationStatus.DECLINED },
+        where: {
+          id,
+          status: ApplicationStatus.DECLINED,
+          student: { NOT: { email: { endsWith: `@${REMOVED_ACCOUNT_EMAIL_DOMAIN}` } } },
+        },
         data: { status: ApplicationStatus.PENDING, reviewedById: null, reviewedAt: null, decisionNote: null },
       });
       if (reopened.count !== 1) {
-        const exists = await tx.studentApplication.findUnique({ where: { id }, select: { id: true } });
-        if (!exists) throw new NotFoundException('Application not found.');
+        const row = await tx.studentApplication.findUnique({
+          where: { id },
+          select: { status: true, student: { select: { email: true } } },
+        });
+        if (!row) throw new NotFoundException('Application not found.');
+        if (row.status === ApplicationStatus.DECLINED && isRemovedAccountEmail(row.student.email)) {
+          throw new ConflictException(REMOVED_REOPEN_MESSAGE);
+        }
         throw new ConflictException('Only declined applications can be reopened.');
       }
 
