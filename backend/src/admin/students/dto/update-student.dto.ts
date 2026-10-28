@@ -46,8 +46,14 @@ export class UpdateStudentDto {
   @whenSent()
   @Transform(labelOrUndefined)
   @IsString()
-  @Length(2, 200)
-  location?: string;
+  @Length(2, 100)
+  city?: string;
+
+  @whenSent()
+  @Transform(labelOrUndefined)
+  @IsString()
+  @Length(2, 50)
+  state?: string;
 
   @whenSent()
   @Transform(labelOrUndefined)

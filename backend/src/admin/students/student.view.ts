@@ -42,7 +42,8 @@ export const studentDetailSelect = {
     select: {
       dateOfBirth: true,
       phone: true,
-      location: true,
+      city: true,
+      state: true,
       schoolName: true,
       gradeLevel: true,
       guardianName: true,
@@ -53,6 +54,7 @@ export const studentDetailSelect = {
   studentApplication: {
     select: {
       id: true,
+      reference: true,
       status: true,
       submittedAt: true,
       reviewedAt: true,
@@ -60,7 +62,8 @@ export const studentDetailSelect = {
       hopeToLearn: true,
       stemExperience: true,
       decisionNote: true,
-      consentAcceptedAt: true,
+      termsAcceptedAt: true,
+      privacyAcceptedAt: true,
       guardianConsentAt: true,
       consentVersion: true,
       preferredTrack: { select: { id: true, name: true } },
@@ -72,6 +75,7 @@ export const studentDetailSelect = {
     orderBy: [{ enrolledAt: 'desc' }, { id: 'asc' }],
     select: {
       id: true,
+      reference: true,
       status: true,
       enrolledAt: true,
       endedAt: true,
@@ -119,6 +123,8 @@ export function toStudentSummary(row: ListRow): StudentSummary {
 
 export interface EnrollmentHistoryItem {
   id: string;
+  /** e.g. "ENR-17" */
+  reference: string;
   status: EnrollmentStatus;
   enrolledAt: Date;
   endedAt: Date | null;
@@ -144,7 +150,8 @@ export function toStudentDetail(row: DetailRow, today: string) {
           dateOfBirth: formatCalendarDate(profile.dateOfBirth),
           age: ageOnDate(formatCalendarDate(profile.dateOfBirth), today),
           phone: profile.phone,
-          location: profile.location,
+          city: profile.city,
+          state: profile.state,
           schoolName: profile.schoolName,
           gradeLevel: profile.gradeLevel,
           guardian: profile.guardianName
@@ -155,12 +162,18 @@ export function toStudentDetail(row: DetailRow, today: string) {
     application: application
       ? {
           id: application.id,
+          reference: application.reference,
           status: application.status,
           submittedAt: application.submittedAt,
           reviewedAt: application.reviewedAt,
           preferredTrack: application.preferredTrack,
           answers: { whyJoin: application.whyJoin, hopeToLearn: application.hopeToLearn, stemExperience: application.stemExperience },
-          consent: { acceptedAt: application.consentAcceptedAt, guardianConsentAt: application.guardianConsentAt, version: application.consentVersion },
+          consent: {
+            termsAcceptedAt: application.termsAcceptedAt,
+            privacyAcceptedAt: application.privacyAcceptedAt,
+            guardianConsentAt: application.guardianConsentAt,
+            version: application.consentVersion,
+          },
           review: application.reviewedAt
             ? { reviewedBy: application.reviewedBy, note: application.decisionNote }
             : null,
@@ -169,6 +182,7 @@ export function toStudentDetail(row: DetailRow, today: string) {
     enrollments: row.enrollments.map(
       (e): EnrollmentHistoryItem => ({
         id: e.id,
+        reference: e.reference,
         status: e.status,
         enrolledAt: e.enrolledAt,
         endedAt: e.endedAt,

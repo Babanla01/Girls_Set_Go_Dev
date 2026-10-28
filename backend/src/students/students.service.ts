@@ -53,7 +53,7 @@ export type RegistrationResult =
       trapped: false;
       sessionToken: string;
       user: AuthenticatedUser;
-      application: { status: 'PENDING'; submittedAt: Date };
+      application: { status: 'PENDING'; submittedAt: Date; reference: string };
       emailVerified: false;
     };
 
@@ -85,7 +85,7 @@ export class StudentsService {
 
     // 1) Rules that involve several fields at once.
     if (dto.password !== dto.confirmPassword) throw new BadRequestException(PASSWORDS_DIFFER_MESSAGE);
-    const problems = this.passwords.validatePolicy(dto.password);
+    const problems = this.passwords.validatePolicy(dto.password, dto.email); // also refuses "password = email"
     if (problems.length > 0) throw new BadRequestException(problems);
 
     const today = todayInProgrammeZone();
@@ -124,7 +124,8 @@ export class StudentsService {
             userId: user.id,
             dateOfBirth: parseCalendarDate(dto.dateOfBirth),
             phone: dto.phone,
-            location: dto.location,
+            city: dto.city,
+            state: dto.state,
             schoolName: dto.schoolName,
             gradeLevel: dto.gradeLevel,
             guardianName: dto.guardianName ?? null,
@@ -140,11 +141,12 @@ export class StudentsService {
             whyJoin: dto.whyJoin,
             hopeToLearn: dto.hopeToLearn,
             stemExperience: dto.stemExperience ?? null,
-            consentAcceptedAt: now,
+            termsAcceptedAt: now, // the form only submits when both boxes were ticked
+            privacyAcceptedAt: now,
             guardianConsentAt: dto.guardianConsent === true ? now : null,
             consentVersion: CONSENT_VERSION,
           },
-          select: { status: true, submittedAt: true },
+          select: { status: true, submittedAt: true, reference: true },
         });
 
         // Two emails go to the outbox (sent by the email worker in a later batch).
@@ -179,7 +181,7 @@ export class StudentsService {
         trapped: false,
         sessionToken,
         user,
-        application: { status: 'PENDING', submittedAt: application.submittedAt },
+        application: { status: 'PENDING', submittedAt: application.submittedAt, reference: application.reference },
         emailVerified: false,
       };
     } catch (error) {
@@ -236,6 +238,7 @@ export class StudentsService {
       this.prisma.studentApplication.findUnique({
         where: { studentId: user.id },
         select: {
+          reference: true,
           status: true,
           submittedAt: true,
           reviewedAt: true, // the decision DATE only - the private note is never selected
@@ -269,6 +272,7 @@ export class StudentsService {
       },
       application: application
         ? {
+            reference: application.reference,
             status: application.status,
             submittedAt: application.submittedAt,
             decidedAt: application.reviewedAt,

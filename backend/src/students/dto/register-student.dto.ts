@@ -2,8 +2,10 @@
  * register-student.dto.ts
  * ---------------------------------------------------------------------------
  * The exact shape of the signup + application form (from the design guide):
- * personal info, school info, preferred track, application questions, guardian
- * info, account password, and consent. Anything else is rejected.
+ * personal info (city and state are separate boxes), school info, preferred
+ * track, application questions (why join: up to 500 characters), guardian
+ * info, account password, and three separate agreements (terms, privacy,
+ * guardian aware). Anything else is rejected.
  *
  * Rules that need more than one field (under-18 guardian rules, matching
  * passwords, password strength) are checked in the service, so the student
@@ -61,8 +63,14 @@ export class RegisterStudentDto {
 
   @Transform(label)
   @IsString()
-  @Length(2, 200)
-  location!: string;
+  @Length(2, 100)
+  city!: string;
+
+  /** Free text on purpose (not a fixed list), so a student outside the US can apply too. */
+  @Transform(label)
+  @IsString()
+  @Length(2, 50)
+  state!: string;
 
   // --- school ----------------------------------------------------------------
   @Transform(label)
@@ -82,7 +90,7 @@ export class RegisterStudentDto {
   // --- application questions -----------------------------------------------------
   @Transform(trimmed)
   @IsString()
-  @Length(10, 2000)
+  @Length(10, 500)
   whyJoin!: string;
 
   @Transform(trimmed)

@@ -15,6 +15,7 @@ import { ageOnDate } from '../../students/age';
 
 export const applicationListSelect = {
   id: true,
+  reference: true,
   status: true,
   submittedAt: true,
   reviewedAt: true,
@@ -24,6 +25,7 @@ export const applicationListSelect = {
 
 export const applicationDetailSelect = {
   id: true,
+  reference: true,
   status: true,
   submittedAt: true,
   reviewedAt: true,
@@ -31,7 +33,8 @@ export const applicationDetailSelect = {
   hopeToLearn: true,
   stemExperience: true,
   decisionNote: true,
-  consentAcceptedAt: true,
+  termsAcceptedAt: true,
+  privacyAcceptedAt: true,
   guardianConsentAt: true,
   consentVersion: true,
   preferredTrack: { select: { id: true, name: true } },
@@ -47,7 +50,8 @@ export const applicationDetailSelect = {
         select: {
           dateOfBirth: true,
           phone: true,
-          location: true,
+          city: true,
+          state: true,
           schoolName: true,
           gradeLevel: true,
           guardianName: true,
@@ -57,7 +61,7 @@ export const applicationDetailSelect = {
       },
     },
   },
-  enrollment: { select: { id: true, enrolledAt: true, status: true, cohort: { select: cohortSelect } } },
+  enrollment: { select: { id: true, reference: true, enrolledAt: true, status: true, cohort: { select: cohortSelect } } },
 } satisfies Prisma.StudentApplicationSelect;
 
 type ListRow = Prisma.StudentApplicationGetPayload<{ select: typeof applicationListSelect }>;
@@ -65,6 +69,8 @@ type DetailRow = Prisma.StudentApplicationGetPayload<{ select: typeof applicatio
 
 export interface ApplicationSummary {
   id: string;
+  /** e.g. "GSG-2026-0391" */
+  reference: string;
   status: ApplicationStatus;
   submittedAt: Date;
   reviewedAt: Date | null;
@@ -75,6 +81,7 @@ export interface ApplicationSummary {
 export function toApplicationSummary(row: ListRow): ApplicationSummary {
   return {
     id: row.id,
+    reference: row.reference,
     status: row.status,
     submittedAt: row.submittedAt,
     reviewedAt: row.reviewedAt,
@@ -101,7 +108,8 @@ export function toApplicationDetail(row: DetailRow, today: string) {
           dateOfBirth: formatCalendarDate(profile.dateOfBirth),
           age: ageOnDate(formatCalendarDate(profile.dateOfBirth), today),
           phone: profile.phone,
-          location: profile.location,
+          city: profile.city,
+          state: profile.state,
           schoolName: profile.schoolName,
           gradeLevel: profile.gradeLevel,
           guardian: profile.guardianName
@@ -111,7 +119,8 @@ export function toApplicationDetail(row: DetailRow, today: string) {
       : null,
     answers: { whyJoin: row.whyJoin, hopeToLearn: row.hopeToLearn, stemExperience: row.stemExperience },
     consent: {
-      acceptedAt: row.consentAcceptedAt,
+      termsAcceptedAt: row.termsAcceptedAt,
+      privacyAcceptedAt: row.privacyAcceptedAt,
       guardianConsentAt: row.guardianConsentAt,
       version: row.consentVersion,
     },
@@ -119,6 +128,7 @@ export function toApplicationDetail(row: DetailRow, today: string) {
     enrollment: row.enrollment
       ? {
           id: row.enrollment.id,
+          reference: row.enrollment.reference,
           status: row.enrollment.status,
           enrolledAt: row.enrollment.enrolledAt,
           cohort: toCohortView(row.enrollment.cohort, today) as CohortView,
