@@ -61,6 +61,16 @@ enum EmailStatus {
   FAILED
 }
 
+/// Why an admin declined an application. INTERNAL: used for reporting only and
+/// never shown to the student.
+enum DeclineReason {
+  NOT_ELIGIBLE
+  COHORT_FULL
+  INCOMPLETE_INFORMATION
+  DUPLICATE_APPLICATION
+  OTHER
+}
+
 /// A track is archived instead of deleted, so history is never lost.
 enum TrackStatus {
   ACTIVE
@@ -265,8 +275,13 @@ model EmailOutbox {
   nextAttemptAt DateTime    @default(now()) @map("next_attempt_at") @db.Timestamptz(3)
   sentAt        DateTime?   @map("sent_at") @db.Timestamptz(3)
   createdAt     DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// What this email is about, e.g. "student_application" + that application's id.
+  /// Lets an admin see (and retry) the emails of one thing. Empty for unlinked emails.
+  entityType    String?     @map("entity_type") @db.VarChar(50)
+  entityId      String?     @map("entity_id") @db.VarChar(64)
 
   @@index([status, nextAttemptAt])
+  @@index([entityType, entityId])
   @@map("email_outbox")
 }
 
@@ -403,6 +418,10 @@ model StudentApplication {
   reviewedAt       DateTime?         @map("reviewed_at") @db.Timestamptz(3)
   /// Private note for admins. NEVER shown to the student.
   decisionNote     String?           @map("decision_note") @db.VarChar(1000)
+  /// Why it was declined (internal, for reporting only). Set exactly when status = DECLINED.
+  declineReason    DeclineReason?    @map("decline_reason")
+  /// Optional message the admin chose to include in the decline EMAIL (declined only).
+  personalNote     String?           @map("personal_note") @db.VarChar(500)
   // --- consent record: three agreements, each with its own timestamp, plus the wording version
   termsAcceptedAt   DateTime         @map("terms_accepted_at") @db.Timestamptz(3)
   privacyAcceptedAt DateTime         @map("privacy_accepted_at") @db.Timestamptz(3)

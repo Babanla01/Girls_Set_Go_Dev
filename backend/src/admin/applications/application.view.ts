@@ -33,6 +33,8 @@ export const applicationDetailSelect = {
   hopeToLearn: true,
   stemExperience: true,
   decisionNote: true,
+  declineReason: true,
+  personalNote: true,
   termsAcceptedAt: true,
   privacyAcceptedAt: true,
   guardianConsentAt: true,
@@ -124,7 +126,15 @@ export function toApplicationDetail(row: DetailRow, today: string) {
       guardianConsentAt: row.guardianConsentAt,
       version: row.consentVersion,
     },
-    review: row.reviewedAt ? { reviewedBy: row.reviewedBy, reviewedAt: row.reviewedAt, note: row.decisionNote } : null,
+    review: row.reviewedAt
+      ? {
+          reviewedBy: row.reviewedBy,
+          reviewedAt: row.reviewedAt,
+          note: row.decisionNote, // private note (admins only)
+          declineReason: row.declineReason, // internal, for reporting
+          personalNote: row.personalNote, // what was written into the decline email
+        }
+      : null,
     enrollment: row.enrollment
       ? {
           id: row.enrollment.id,

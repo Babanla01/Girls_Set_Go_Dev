@@ -146,15 +146,27 @@ export class StudentsService {
             guardianConsentAt: dto.guardianConsent === true ? now : null,
             consentVersion: CONSENT_VERSION,
           },
-          select: { status: true, submittedAt: true, reference: true },
+          select: { id: true, status: true, submittedAt: true, reference: true },
         });
 
-        // Two emails go to the outbox (sent by the email worker in a later batch).
-        const queued: OutboxEmail[] = [
-          await this.queueVerification(tx, user),
-          { toEmail: user.email, template: 'application-received', payload: { fullName: user.fullName, preferredTrack: track.name } },
+        // Emails go to the outbox (sent by the email worker): the confirmation link, the
+        // "application received" email and - when a guardian was given - a copy for the
+        // guardian. The "received" emails are linked to the application, so a failed one
+        // shows on it. (No copy when the guardian's address is the student's own.)
+        const link = { entityType: 'student_application', entityId: application.id };
+        const received: OutboxEmail[] = [
+          { toEmail: user.email, template: 'application-received', payload: { fullName: user.fullName, preferredTrack: track.name }, ...link },
         ];
-        await this.outbox.enqueue(queued[1], tx);
+        if (dto.guardianName && dto.guardianEmail && dto.guardianEmail !== user.email) {
+          received.push({
+            toEmail: dto.guardianEmail,
+            template: 'application-received',
+            payload: { fullName: dto.guardianName, studentName: user.fullName, preferredTrack: track.name, guardianCopy: true },
+            ...link,
+          });
+        }
+        const queued: OutboxEmail[] = [await this.queueVerification(tx, user), ...received];
+        for (const message of received) await this.outbox.enqueue(message, tx);
 
         // The audit entry holds NO personal details - only ids and a yes/no.
         await this.audit.record(

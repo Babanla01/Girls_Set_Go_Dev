@@ -8,7 +8,11 @@
  *   - EVERY value is escaped before it goes into the HTML, so a name like
  *     "<script>" can never become markup;
  *   - a link is used only if it starts with http:// or https://;
- *   - the decline email gives NO reason and never mentions the private note;
+ *   - the decline email never gives the INTERNAL reason or the private admin
+ *     note; it shows only the optional personal note an admin chose to write;
+ *   - when a guardian is on file she gets a COPY of the received / accepted /
+ *     declined emails, worded for her ("guardianCopy" in the values) and
+ *     without any sign-in button;
  *   - an unknown template, or a missing link where one is needed, returns
  *     null (the sender then marks the email as failed instead of sending
  *     something broken).
@@ -55,6 +59,10 @@ const lifetime = (ms: number): string => {
 
 const greeting = (payload: Payload): string => (str(payload.fullName) ? `Hello ${str(payload.fullName)},` : 'Hello,');
 
+/** True for the copy of a student's email that goes to her parent or guardian. */
+const isGuardianCopy = (payload: Payload): boolean => payload.guardianCopy === true;
+const studentName = (payload: Payload): string => str(payload.studentName) || 'the student';
+
 const BUILDERS: Record<string, (payload: Payload) => Content | null> = {
   'verify-email': (p) => {
     const url = safeUrl(p.actionUrl);
@@ -68,20 +76,31 @@ const BUILDERS: Record<string, (payload: Payload) => Content | null> = {
     };
   },
 
-  'application-received': (p) => ({
-    subject: 'We received your application',
-    greeting: greeting(p),
-    paragraphs: [
-      str(p.preferredTrack)
-        ? `Thank you for applying to ${BRAND}. We have received your application for the ${str(p.preferredTrack)} track.`
-        : `Thank you for applying to ${BRAND}. We have received your application.`,
-      'Our team will review it and email you as soon as a decision has been made.',
-    ],
-  }),
+  'application-received': (p) => {
+    if (isGuardianCopy(p)) {
+      const student = studentName(p);
+      return {
+        subject: `We received ${student}'s application`,
+        greeting: greeting(p),
+        paragraphs: [
+          `${student} has applied to ${BRAND}${str(p.preferredTrack) ? ` for the ${str(p.preferredTrack)} track` : ''}. You are receiving this copy because you are listed as the parent or guardian.`,
+          `Our team will review the application and email ${student}, with a copy to you, as soon as a decision has been made.`,
+        ],
+      };
+    }
+    return {
+      subject: 'We received your application',
+      greeting: greeting(p),
+      paragraphs: [
+        str(p.preferredTrack)
+          ? `Thank you for applying to ${BRAND}. We have received your application for the ${str(p.preferredTrack)} track.`
+          : `Thank you for applying to ${BRAND}. We have received your application.`,
+        'Our team will review it and email you as soon as a decision has been made.',
+      ],
+    };
+  },
 
   'application-accepted': (p) => {
-    const url = safeUrl(p.actionUrl);
-    if (!url) return null;
     const details = [
       str(p.trackName) && `Track: ${str(p.trackName)}`,
       str(p.courseTitle) && `Course: ${str(p.courseTitle)}`,
@@ -89,6 +108,21 @@ const BUILDERS: Record<string, (payload: Payload) => Content | null> = {
       str(p.startsOn) && str(p.endsOn) && `Runs from ${str(p.startsOn)} to ${str(p.endsOn)}`,
     ].filter((line): line is string => Boolean(line));
 
+    // The guardian's copy has no sign-in button (the account is the student's).
+    if (isGuardianCopy(p)) {
+      const student = studentName(p);
+      return {
+        subject: `${student}'s application was accepted`,
+        greeting: greeting(p),
+        paragraphs: [
+          `Good news: ${student}'s application to ${BRAND} has been accepted. You are receiving this copy because you are listed as the parent or guardian.`,
+          ...details,
+        ],
+      };
+    }
+
+    const url = safeUrl(p.actionUrl);
+    if (!url) return null;
     return {
       subject: 'Your application was accepted',
       greeting: greeting(p),
@@ -97,15 +131,34 @@ const BUILDERS: Record<string, (payload: Payload) => Content | null> = {
     };
   },
 
-  // No reason is ever given here, and the private admin note is never included.
-  'application-declined': (p) => ({
-    subject: 'About your application',
-    greeting: greeting(p),
-    paragraphs: [
-      `Thank you for your interest in ${BRAND}.`,
-      'After careful review, we are unable to offer you a place at this time. We appreciate the time you took to apply.',
-    ],
-  }),
+  // The internal reason and the private admin note are never included - only the
+  // optional personal note an admin chose to write for the student.
+  'application-declined': (p) => {
+    const note = str(p.personalNote);
+    const noteParagraph = note ? [`A personal note from our team: ${note}`] : [];
+
+    if (isGuardianCopy(p)) {
+      const student = studentName(p);
+      return {
+        subject: `About ${student}'s application`,
+        greeting: greeting(p),
+        paragraphs: [
+          `Thank you for your interest in ${BRAND} on behalf of ${student}.`,
+          `After careful review, we are unable to offer ${student} a place at this time. You are receiving this copy because you are listed as the parent or guardian.`,
+          ...noteParagraph,
+        ],
+      };
+    }
+    return {
+      subject: 'About your application',
+      greeting: greeting(p),
+      paragraphs: [
+        `Thank you for your interest in ${BRAND}.`,
+        'After careful review, we are unable to offer you a place at this time. We appreciate the time you took to apply.',
+        ...noteParagraph,
+      ],
+    };
+  },
 
   'password-reset': (p) => {
     const url = safeUrl(p.actionUrl);

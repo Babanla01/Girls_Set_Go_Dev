@@ -6,10 +6,12 @@
  *
  * For each such applicant, in ONE all-or-nothing database transaction:
  *   - the profile (date of birth, phone, school, guardian...) is deleted;
- *   - the application answers and the private decision note are wiped;
+ *   - the application answers, the private decision note and the personal
+ *     note written for the decline email are wiped;
  *   - the account is anonymised and disabled (name and email replaced, no
  *     password, no sessions, no pending links);
- *   - emails queued TO her old address are deleted from the outbox;
+ *   - emails queued TO her old address, and the emails linked to her application
+ *     (which includes the copies that went to her guardian), are deleted from the outbox;
  *   - one audit entry is written (ids only, no personal details).
  *
  * Safe to run as often as you like: an applicant already processed is never
@@ -125,12 +127,16 @@ export class RetentionService {
       // processed a moment ago, this finds nothing and we skip it.
       const claimed = await tx.studentApplication.updateMany({
         where: { id: candidate.id, whyJoin: { not: REMOVED_TEXT }, ...this.dueWhere(now) },
-        data: { whyJoin: REMOVED_TEXT, hopeToLearn: REMOVED_TEXT, stemExperience: null, decisionNote: null },
+        data: { whyJoin: REMOVED_TEXT, hopeToLearn: REMOVED_TEXT, stemExperience: null, decisionNote: null, personalNote: null },
       });
       if (claimed.count !== 1) return false;
 
       await tx.studentProfile.deleteMany({ where: { userId: candidate.studentId } });
-      await tx.emailOutbox.deleteMany({ where: { toEmail: originalEmail } });
+      await tx.emailOutbox.deleteMany({
+        where: {
+          OR: [{ toEmail: originalEmail }, { entityType: 'student_application', entityId: candidate.id }],
+        },
+      });
       await tx.authToken.deleteMany({ where: { userId: candidate.studentId } });
       await tx.session.deleteMany({ where: { userId: candidate.studentId } });
 

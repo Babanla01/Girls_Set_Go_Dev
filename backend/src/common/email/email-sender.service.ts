@@ -12,8 +12,9 @@
  *   2. Build the message from its template and send it by SMTP.
  *   3. Success  -> mark it SENT and wipe its stored values (they may contain
  *                  a one-time link). The recipient address stays, as a record.
- *      Failure  -> try again later (1, 5, 15, then 60 minutes), and give up
- *                  (FAILED) after 5 attempts.
+ *      Failure  -> try again later (after 1 minute, then 15 minutes), and give up
+ *                  (FAILED) after 3 attempts. A failed email shows on the page
+ *                  of the thing it belongs to, where an admin can retry it.
  *      A template that does not exist or cannot be built -> FAILED at once.
  *
  * An email is delivered AT LEAST once: in the rare case that it is sent but
@@ -27,9 +28,9 @@ import { renderEmail } from './email.templates';
 import { MailTransport } from './mail.transport';
 
 /** Give up after this many attempts. */
-export const EMAIL_MAX_ATTEMPTS = 5;
-/** Wait before attempt 2, 3, 4 and 5 (minutes). */
-export const EMAIL_RETRY_DELAYS_MINUTES = [1, 5, 15, 60];
+export const EMAIL_MAX_ATTEMPTS = 3;
+/** Wait before attempt 2 and 3 (minutes). */
+export const EMAIL_RETRY_DELAYS_MINUTES = [1, 15];
 /** How long a claimed email is "borrowed" before it may be picked up again. */
 export const EMAIL_LEASE_SECONDS = 300;
 export const EMAIL_BATCH_SIZE = 20;

@@ -19,7 +19,13 @@
  *   - Nothing is deleted: a withdrawn or moved student keeps her history.
  */
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { AccountStatus, CohortStatus, CourseStatus, EnrollmentStatus, Prisma, Role } from '@prisma/client';
+import { AccountStatus, CohortStatus, CourseStatus, Prisma, Role } from '@prisma/client';
+
+const EnrollmentStatus = {
+  ACTIVE: 'ACTIVE',
+  WITHDRAWN: 'WITHDRAWN',
+  TRANSFERRED: 'TRANSFERRED',
+} as const;
 
 import type { AuthenticatedUser, RequestContext } from '../../auth/auth.types';
 import { SessionService } from '../../auth/session.service';
@@ -75,7 +81,7 @@ export class StudentManagementService {
         changed.push('fullName');
       }
 
-      for (const field of ['phone', 'location', 'schoolName', 'gradeLevel'] as const) {
+      for (const field of ['phone', 'city', 'state', 'schoolName', 'gradeLevel'] as const) {
         const value = dto[field];
         if (value !== undefined && value !== profile[field]) {
           profileData[field] = value;
