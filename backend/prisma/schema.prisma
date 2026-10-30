@@ -71,6 +71,22 @@ enum DeclineReason {
   OTHER
 }
 
+/// A course copy is either the course's master TEMPLATE or one cohort's own COPY of it.
+enum ContentKind {
+  TEMPLATE
+  COHORT_COPY
+}
+
+/// The kinds of block a lesson is built from.
+enum BlockType {
+  TEXT
+  VIDEO
+  ACTIVITY
+  STEPS
+  CALLOUT
+  RESOURCE
+}
+
 /// A track is archived instead of deleted, so history is never lost.
 enum TrackStatus {
   ACTIVE
@@ -148,6 +164,8 @@ model User {
   studentApplicationsReviewed StudentApplication[]    @relation("StudentApplicationReviewedBy")
   enrollments                 Enrollment[]            @relation("EnrollmentStudent")
   enrollmentsMade             Enrollment[]            @relation("EnrollmentCreatedBy")
+  /// Course copies this person last edited.
+  courseContentsEdited        CourseContent[]         @relation("ContentEditedBy")
 
   @@index([role, status])
   @@map("users")
@@ -325,6 +343,8 @@ model Course {
   track     Track    @relation(fields: [trackId], references: [id], onDelete: Restrict)
   createdBy User?    @relation("CourseCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   cohorts   Cohort[]
+  /// The course's master template and each cohort's copy of it.
+  contents  CourseContent[]
 
   @@unique([trackId, titleKey])
   @@index([trackId, status])
@@ -352,6 +372,8 @@ model Cohort {
   createdBy   User?              @relation("CohortCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   instructors CohortInstructor[]
   enrollments Enrollment[]
+  /// This cohort's own copy of the course content (made from the course template on first use).
+  courseContent CourseContent?
 
   @@unique([courseId, nameKey])
   @@index([courseId, status])
@@ -466,4 +488,105 @@ model Enrollment {
   @@index([cohortId, status])
   @@index([studentId, status])
   @@map("enrollments")
+}
+
+// ------------------------------------------------------ course content (draft)
+
+/// One EDITABLE copy of a course: either the course's master TEMPLATE (admins
+/// build it; students never see it) or one COHORT's own copy, made from the
+/// template the first time it is opened. This is the DRAFT (working) content;
+/// publishing and version history arrive in the next batch.
+/// The database guarantees: at most one template per course; a template has no
+/// cohort and a cohort copy always has one (see the HAND-WRITTEN rules in the migration).
+model CourseContent {
+  id                  String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kind                ContentKind
+  courseId            String      @map("course_id") @db.Uuid
+  /// Set for a cohort's own copy; empty for the course's master template.
+  cohortId            String?     @unique @map("cohort_id") @db.Uuid
+  /// For a cohort copy: which published template version it started from (0 = none yet).
+  baseTemplateVersion Int         @default(0) @map("base_template_version")
+  /// Goes up by one on every edit. The screen shows "Saved" when it changes.
+  draftRevision       Int         @default(0) @map("draft_revision")
+  lastEditedById      String?     @map("last_edited_by_id") @db.Uuid
+  lastEditedAt        DateTime?   @map("last_edited_at") @db.Timestamptz(3)
+  createdAt           DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  course     Course       @relation(fields: [courseId], references: [id], onDelete: Restrict)
+  cohort     Cohort?      @relation(fields: [cohortId], references: [id], onDelete: Restrict)
+  lastEditedBy User?      @relation("ContentEditedBy", fields: [lastEditedById], references: [id], onDelete: Restrict)
+  weeks      CourseWeek[]
+
+  @@index([courseId])
+  @@map("course_contents")
+}
+
+/// A week of a course copy. Positions are always 1, 2, 3 ... in order.
+model CourseWeek {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contentId String   @map("content_id") @db.Uuid
+  position  Int
+  title     String   @db.VarChar(150)
+  summary   String?  @db.VarChar(1000)
+  /// For an item copied from the template: the template item it came from (used later to merge updates).
+  originId  String?  @map("origin_id") @db.Uuid
+  /// Goes up by one on every edit; stops two people overwriting each other.
+  revision  Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  content CourseContent  @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  lessons CourseLesson[]
+
+  @@unique([id, contentId])
+  @@index([contentId, position])
+  @@map("course_weeks")
+}
+
+/// A lesson inside a week. Linked to its week THROUGH the course copy, so a lesson
+/// and its week can never belong to different copies.
+model CourseLesson {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contentId        String   @map("content_id") @db.Uuid
+  weekId           String   @map("week_id") @db.Uuid
+  position         Int
+  title            String   @db.VarChar(150)
+  summary          String?  @db.VarChar(1000)
+  estimatedMinutes Int?     @map("estimated_minutes")
+  originId         String?  @map("origin_id") @db.Uuid
+  revision         Int      @default(1)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  week   CourseWeek    @relation(fields: [weekId, contentId], references: [id, contentId], onDelete: Cascade)
+  blocks LessonBlock[]
+
+  @@unique([id, contentId])
+  @@index([weekId, position])
+  @@index([contentId])
+  @@map("course_lessons")
+}
+
+/// One block of a lesson (text, video, activity, steps, callout or resource).
+/// What it holds depends on its type; the code (block-data.ts) validates `data`.
+model LessonBlock {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contentId      String    @map("content_id") @db.Uuid
+  lessonId       String    @map("lesson_id") @db.Uuid
+  position       Int
+  type           BlockType
+  /// true = a note for instructors only; students never see it.
+  instructorOnly Boolean   @default(false) @map("instructor_only")
+  data           Json
+  originId       String?   @map("origin_id") @db.Uuid
+  revision       Int       @default(1)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  lesson CourseLesson @relation(fields: [lessonId, contentId], references: [id, contentId], onDelete: Cascade)
+
+  @@index([lessonId, position])
+  @@index([contentId])
+  @@map("lesson_blocks")
 }

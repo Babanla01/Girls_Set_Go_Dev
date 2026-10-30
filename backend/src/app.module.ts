@@ -23,6 +23,7 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { OutboxModule } from './common/outbox/outbox.module';
 import { OriginGuard } from './common/security/origin.guard';
 import { Env, validateEnv } from './config/env.validation';
+import { CourseContentModule } from './course-content/course-content.module';
 import { HealthModule } from './health/health.module';
 import { InstructorModule } from './instructor/instructor.module';
 import { PrismaModule } from './prisma/prisma.module';
@@ -108,6 +109,7 @@ import { StudentsModule } from './students/students.module';
     AuthModule,
     AdminModule,
     InstructorModule,
+    CourseContentModule,
     StudentsModule,
     PublicModule,
     HealthModule,
