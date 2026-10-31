@@ -77,6 +77,12 @@ enum ContentKind {
   COHORT_COPY
 }
 
+/// How a saved course version came to be: someone PUBLISHED the draft, or RESTOREd an older version.
+enum VersionSource {
+  PUBLISH
+  RESTORE
+}
+
 /// The kinds of block a lesson is built from.
 enum BlockType {
   TEXT
@@ -495,7 +501,7 @@ model Enrollment {
 /// One EDITABLE copy of a course: either the course's master TEMPLATE (admins
 /// build it; students never see it) or one COHORT's own copy, made from the
 /// template the first time it is opened. This is the DRAFT (working) content;
-/// publishing and version history arrive in the next batch.
+/// publishing freezes it into numbered versions (CourseVersion).
 /// The database guarantees: at most one template per course; a template has no
 /// cohort and a cohort copy always has one (see the HAND-WRITTEN rules in the migration).
 model CourseContent {
@@ -510,6 +516,12 @@ model CourseContent {
   draftRevision       Int         @default(0) @map("draft_revision")
   lastEditedById      String?     @map("last_edited_by_id") @db.Uuid
   lastEditedAt        DateTime?   @map("last_edited_at") @db.Timestamptz(3)
+  /// The LIVE version number (what students see). Empty = nothing published yet.
+  publishedVersion    Int?        @map("published_version")
+  publishedAt         DateTime?   @map("published_at") @db.Timestamptz(3)
+  /// The draft revision at the moment of the last publish. If the draft revision differs now,
+  /// there may be unpublished changes.
+  publishedDraftRevision Int?     @map("published_draft_revision")
   createdAt           DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt           DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -517,6 +529,7 @@ model CourseContent {
   cohort     Cohort?      @relation(fields: [cohortId], references: [id], onDelete: Restrict)
   lastEditedBy User?      @relation("ContentEditedBy", fields: [lastEditedById], references: [id], onDelete: Restrict)
   weeks      CourseWeek[]
+  versions   CourseVersion[]
 
   @@index([courseId])
   @@map("course_contents")
@@ -533,6 +546,8 @@ model CourseWeek {
   originId  String?  @map("origin_id") @db.Uuid
   /// Goes up by one on every edit; stops two people overwriting each other.
   revision  Int      @default(1)
+  /// Who last changed it (filled in by a database trigger; empty for a copy made from a template).
+  editedById String? @map("edited_by_id") @db.Uuid
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -556,6 +571,8 @@ model CourseLesson {
   estimatedMinutes Int?     @map("estimated_minutes")
   originId         String?  @map("origin_id") @db.Uuid
   revision         Int      @default(1)
+  /// Who last changed it (filled in by a database trigger).
+  editedById       String?  @map("edited_by_id") @db.Uuid
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -581,6 +598,8 @@ model LessonBlock {
   data           Json
   originId       String?   @map("origin_id") @db.Uuid
   revision       Int       @default(1)
+  /// Who last changed it (filled in by a database trigger).
+  editedById     String?   @map("edited_by_id") @db.Uuid
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -589,4 +608,39 @@ model LessonBlock {
   @@index([lessonId, position])
   @@index([contentId])
   @@map("lesson_blocks")
+}
+
+// ------------------------------------------------------ course versions (published)
+
+/// One PUBLISHED version of a course copy: a frozen snapshot of all its weeks,
+/// lessons and blocks, with who published it and what changed. Versions are never
+/// changed or deleted (the database refuses). The live version is the one named in
+/// CourseContent.publishedVersion.
+/// `publishedById` is a plain id (users are never deleted), so no User relation is needed.
+model CourseVersion {
+  id                 String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contentId          String        @map("content_id") @db.Uuid
+  /// 1, 2, 3 ... per course copy.
+  number             Int
+  source             VersionSource
+  /// A short description: the publisher's note, or an automatic one such as "2 lessons edited".
+  summary            String        @db.VarChar(500)
+  /// The whole course copy at that moment (see snapshot.ts).
+  snapshot           Json
+  /// A compact list of what changed compared with the version before it.
+  changes            Json
+  weekCount          Int           @map("week_count")
+  lessonCount        Int           @map("lesson_count")
+  blockCount         Int           @map("block_count")
+  publishedById      String        @map("published_by_id") @db.Uuid
+  /// The role that person had at the time.
+  publishedByRole    Role          @map("published_by_role")
+  /// For a RESTORE: the older version whose contents were made live again.
+  restoredFromNumber Int?          @map("restored_from_number")
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  content CourseContent @relation(fields: [contentId], references: [id], onDelete: Restrict)
+
+  @@unique([contentId, number])
+  @@map("course_versions")
 }

@@ -1,8 +1,9 @@
 /**
  * course-content.module.ts
  * ---------------------------------------------------------------------------
- * Building a course: its master template, each cohort's own copy, and the weeks,
- * lessons and blocks inside them (the draft content).
+ * Building a course: its master template, each cohort's own copy, the weeks,
+ * lessons and blocks inside them (the draft content), and publishing them as
+ * numbered versions.
  *
  * It also REGISTERS the ownership rule "who may open / edit a course copy" with
  * the permission framework (deny by default):
@@ -22,13 +23,14 @@ import { COURSE_CONTENT_MANAGE } from './course-content.constants';
 import { CourseContentController } from './course-content.controller';
 import { CourseContentService } from './course-content.service';
 import { CourseStructureService } from './course-structure.service';
+import { CourseVersionsService } from './course-versions.service';
 import { LessonBlocksService } from './lesson-blocks.service';
 
 @Module({
   imports: [AuthModule],
   controllers: [CourseContentController],
-  providers: [ContentEditor, CourseContentService, CourseStructureService, LessonBlocksService],
-  exports: [ContentEditor],
+  providers: [ContentEditor, CourseContentService, CourseStructureService, LessonBlocksService, CourseVersionsService],
+  exports: [ContentEditor, CourseVersionsService],
 })
 export class CourseContentModule implements OnModuleInit {
   constructor(

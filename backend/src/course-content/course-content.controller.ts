@@ -32,9 +32,30 @@
  *   PATCH  /api/v1/course-content/:contentId/blocks/:blockId                 edit a block (send expectedRevision)
  *   DELETE /api/v1/course-content/:contentId/blocks/:blockId                 remove a block
  *
- * Every change answers with the new draftRevision, so the screen can show "Saved".
+ * Publishing and versions:
+ *   GET    /api/v1/course-content/:contentId/draft-changes    what a publish would change, who edited it, who will see it
+ *   POST   /api/v1/course-content/:contentId/publish          publish the draft as the next version
+ *   GET    /api/v1/course-content/:contentId/versions         the version history
+ *   GET    /api/v1/course-content/:contentId/versions/:number one saved version, with its contents
+ *   GET    /api/v1/course-content/:contentId/compare?from=&to=  compare "live", "draft" or version numbers
+ *
+ * Every draft change answers with the new draftRevision, so the screen can show "Saved".
  */
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseUUIDPipe, Patch, Post, Put, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  ParseIntPipe,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Put,
+  Query,
+  Req,
+} from '@nestjs/common';
 import { Role } from '@prisma/client';
 import type { Request } from 'express';
 
@@ -43,9 +64,12 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CourseContentService } from './course-content.service';
 import { CourseStructureService } from './course-structure.service';
+import { CourseVersionsService } from './course-versions.service';
 import { CreateBlockDto, UpdateBlockDto } from './dto/block.dto';
+import { CompareQuery } from './dto/compare.query';
 import { CreateLessonDto, MoveLessonDto, UpdateLessonDto } from './dto/lesson.dto';
 import { OrderDto } from './dto/order.dto';
+import { PublishDto } from './dto/publish.dto';
 import { CreateWeekDto, UpdateWeekDto } from './dto/week.dto';
 import { LessonBlocksService } from './lesson-blocks.service';
 
@@ -58,6 +82,7 @@ export class CourseContentController {
     private readonly content: CourseContentService,
     private readonly structure: CourseStructureService,
     private readonly blocks: LessonBlocksService,
+    private readonly versions: CourseVersionsService,
   ) {}
 
   // ------------------------------------------------ finding the editable copy
@@ -216,5 +241,41 @@ export class CourseContentController {
     @Param('blockId', uuid()) blockId: string,
   ) {
     return this.blocks.removeBlock(user, contentId, blockId);
+  }
+
+  // ------------------------------------------------- publishing and versions
+
+  @Get(':contentId/draft-changes')
+  draftChanges(@CurrentUser() user: AuthenticatedUser, @Param('contentId', uuid()) contentId: string) {
+    return this.versions.getDraftChanges(user, contentId);
+  }
+
+  @Post(':contentId/publish')
+  publish(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('contentId', uuid()) contentId: string,
+    @Body() dto: PublishDto,
+    @Req() req: Request,
+  ) {
+    return this.versions.publish(user, contentId, dto, getRequestContext(req));
+  }
+
+  @Get(':contentId/versions')
+  listVersions(@CurrentUser() user: AuthenticatedUser, @Param('contentId', uuid()) contentId: string) {
+    return this.versions.listVersions(user, contentId);
+  }
+
+  @Get(':contentId/versions/:number')
+  version(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('contentId', uuid()) contentId: string,
+    @Param('number', new ParseIntPipe()) number: number,
+  ) {
+    return this.versions.getVersion(user, contentId, number);
+  }
+
+  @Get(':contentId/compare')
+  compare(@CurrentUser() user: AuthenticatedUser, @Param('contentId', uuid()) contentId: string, @Query() query: CompareQuery) {
+    return this.versions.compare(user, contentId, query.from, query.to);
   }
 }

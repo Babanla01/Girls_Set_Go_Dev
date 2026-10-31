@@ -104,6 +104,9 @@ export const contentSelect = {
   baseTemplateVersion: true,
   draftRevision: true,
   lastEditedAt: true,
+  publishedVersion: true,
+  publishedAt: true,
+  publishedDraftRevision: true,
   lastEditedBy: { select: { id: true, fullName: true } },
   course: { select: { id: true, title: true } },
   cohort: { select: { id: true, name: true, status: true } },
@@ -122,6 +125,11 @@ export interface ContentView {
   baseTemplateVersion: number;
   lastEditedAt: Date | null;
   lastEditedBy: { id: string; fullName: string } | null;
+  /** The live version number. null = nothing has been published yet, so students see nothing. */
+  publishedVersion: number | null;
+  publishedAt: Date | null;
+  /** true when the draft may differ from the live version (only meaningful once something is live). */
+  hasUnpublishedChanges: boolean;
 }
 
 export const toContentView = (row: ContentRow): ContentView => ({
@@ -133,4 +141,7 @@ export const toContentView = (row: ContentRow): ContentView => ({
   baseTemplateVersion: row.baseTemplateVersion,
   lastEditedAt: row.lastEditedAt,
   lastEditedBy: row.lastEditedBy ? { id: row.lastEditedBy.id, fullName: row.lastEditedBy.fullName } : null,
+  publishedVersion: row.publishedVersion,
+  publishedAt: row.publishedAt,
+  hasUnpublishedChanges: row.publishedVersion !== null && row.draftRevision !== row.publishedDraftRevision,
 });
