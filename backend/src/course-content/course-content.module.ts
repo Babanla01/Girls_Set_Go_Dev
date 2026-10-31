@@ -2,8 +2,8 @@
  * course-content.module.ts
  * ---------------------------------------------------------------------------
  * Building a course: its master template, each cohort's own copy, the weeks,
- * lessons and blocks inside them (the draft content), and publishing them as
- * numbered versions.
+ * lessons and blocks inside them (the draft content), publishing them as numbered
+ * versions, going back (restore / discard), and the admin's course catalog.
  *
  * It also REGISTERS the ownership rule "who may open / edit a course copy" with
  * the permission framework (deny by default):
@@ -20,16 +20,28 @@ import { PolicyService } from '../auth/policy/policy.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ContentEditor, ManageResource } from './content-editor.service';
 import { COURSE_CONTENT_MANAGE } from './course-content.constants';
+import { CourseCatalogController } from './course-catalog.controller';
+import { CourseCatalogService } from './course-catalog.service';
 import { CourseContentController } from './course-content.controller';
 import { CourseContentService } from './course-content.service';
+import { CourseRestoreController } from './course-restore.controller';
+import { CourseRestoreService } from './course-restore.service';
 import { CourseStructureService } from './course-structure.service';
 import { CourseVersionsService } from './course-versions.service';
 import { LessonBlocksService } from './lesson-blocks.service';
 
 @Module({
   imports: [AuthModule],
-  controllers: [CourseContentController],
-  providers: [ContentEditor, CourseContentService, CourseStructureService, LessonBlocksService, CourseVersionsService],
+  controllers: [CourseContentController, CourseRestoreController, CourseCatalogController],
+  providers: [
+    ContentEditor,
+    CourseContentService,
+    CourseStructureService,
+    LessonBlocksService,
+    CourseVersionsService,
+    CourseRestoreService,
+    CourseCatalogService,
+  ],
   exports: [ContentEditor, CourseVersionsService],
 })
 export class CourseContentModule implements OnModuleInit {

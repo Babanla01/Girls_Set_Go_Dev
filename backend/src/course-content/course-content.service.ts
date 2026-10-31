@@ -7,14 +7,15 @@
  *  - Every course has ONE master TEMPLATE. Admins build it; it is never shown
  *    to students.
  *  - Every cohort has its OWN COPY, made from the template the first time it is
- *    opened. Instructors of that cohort edit their copy without touching the
- *    template or other cohorts.
+ *    opened. The copy starts from the template's PUBLISHED version (so a
+ *    half-finished template draft never leaks into a cohort); if the template has
+ *    never been published, it starts from the template's current draft.
+ *    The copy is NOT live to students until someone publishes it.
+ *  - Instructors of that cohort edit their copy without touching the template or
+ *    other cohorts.
  *  - Creating a copy is safe when two people open it at the same moment: the
  *    database allows only one, and the other simply gets that one back.
  *  - Closed cohorts and archived courses do not get new copies.
- *
- * Everything here is the DRAFT (working) content. Publishing, versions and what
- * students see come in the next batch.
  */
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { CohortStatus, ContentKind, CourseStatus } from '@prisma/client';
@@ -36,7 +37,8 @@ import {
   toWeekView,
 } from './course-content.view';
 import { ContentEditor, lockContent, ManageResource } from './content-editor.service';
-import { copyContent } from './copy-content';
+import { loadDraft, parseSnapshot, Snapshot } from './snapshot';
+import { writeSnapshot } from './write-snapshot';
 
 @Injectable()
 export class CourseContentService {
@@ -149,26 +151,55 @@ export class CourseContentService {
       async (tx) => {
         const template = await this.ensureTemplate(tx, cohort.courseId);
 
-        // Nobody can edit the template while we copy it, so the copy is consistent.
+        // Nobody can edit or publish the template while we copy it, so the copy is consistent.
         await lockContent(tx, template.id);
+
+        // Start from the template's PUBLISHED version; if it was never published, from its draft.
+        const state = await tx.courseContent.findUniqueOrThrow({
+          where: { id: template.id },
+          select: { publishedVersion: true },
+        });
+        let source: Snapshot;
+        if (state.publishedVersion !== null) {
+          const version = await tx.courseVersion.findUniqueOrThrow({
+            where: { contentId_number: { contentId: template.id, number: state.publishedVersion } },
+            select: { snapshot: true },
+          });
+          source = parseSnapshot(version.snapshot);
+        } else {
+          source = (await loadDraft(tx, template.id)).snapshot;
+        }
 
         // If another request created the copy a moment ago, the database ignores this
         // insert (count 0) and we simply hand back theirs instead of copying twice.
         const inserted = await tx.courseContent.createMany({
-          data: [{ kind: ContentKind.COHORT_COPY, courseId: cohort.courseId, cohortId: cohort.id, baseTemplateVersion: 0 }],
+          data: [
+            {
+              kind: ContentKind.COHORT_COPY,
+              courseId: cohort.courseId,
+              cohortId: cohort.id,
+              baseTemplateVersion: state.publishedVersion ?? 0,
+            },
+          ],
           skipDuplicates: true,
         });
         const copy = await tx.courseContent.findUniqueOrThrow({ where: { cohortId: cohort.id }, select: { id: true } });
         if (inserted.count === 0) return copy.id;
 
-        const counts = await copyContent(tx, template.id, copy.id);
+        const counts = await writeSnapshot(tx, copy.id, source, { freshIds: true });
         await this.audit.record(
           {
             actorId: user.id,
             action: 'course_content.cohort_copy_created',
             entityType: 'course_content',
             entityId: copy.id,
-            metadata: { cohortId: cohort.id, courseId: cohort.courseId, ...counts },
+            metadata: {
+              cohortId: cohort.id,
+              courseId: cohort.courseId,
+              copiedFrom: state.publishedVersion === null ? 'TEMPLATE_DRAFT' : 'TEMPLATE_PUBLISHED',
+              templateVersion: state.publishedVersion,
+              ...counts,
+            },
             ipAddress: context.ipAddress,
           },
           tx,
