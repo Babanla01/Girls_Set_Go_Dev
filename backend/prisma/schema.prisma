@@ -83,6 +83,12 @@ enum VersionSource {
   RESTORE
 }
 
+/// Why a week is open for a student: her progress opened it, or an instructor / admin opened it early.
+enum WeekUnlockSource {
+  PROGRESS
+  EARLY_OPEN
+}
+
 /// The kinds of block a lesson is built from.
 enum BlockType {
   TEXT
@@ -490,6 +496,9 @@ model Enrollment {
   cohort      Cohort              @relation(fields: [cohortId], references: [id], onDelete: Restrict)
   application StudentApplication? @relation(fields: [applicationId], references: [id], onDelete: Restrict)
   createdBy   User?               @relation("EnrollmentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  /// Her progress through the course (see LessonProgress) and the weeks opened for her (see WeekUnlock).
+  lessonProgress LessonProgress[]
+  weekUnlocks    WeekUnlock[]
 
   @@index([cohortId, status])
   @@index([studentId, status])
@@ -643,4 +652,49 @@ model CourseVersion {
 
   @@unique([contentId, number])
   @@map("course_versions")
+}
+
+// ------------------------------------------------------ student learning progress
+
+/// One row per (enrollment, lesson): when the student completed the lesson, and where she paused
+/// the video. Progress belongs to the ENROLLMENT, so moving to another cohort starts fresh.
+/// `lessonId` is the permanent id of a lesson in a PUBLISHED course version and deliberately has no
+/// link to the draft tables: restoring or discarding a draft can never delete a student's progress.
+model LessonProgress {
+  id                   String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  enrollmentId         String    @map("enrollment_id") @db.Uuid
+  lessonId             String    @map("lesson_id") @db.Uuid
+  /// Empty until she marks the lesson complete. Never overwritten once set.
+  completedAt          DateTime? @map("completed_at") @db.Timestamptz(3)
+  /// The video she was last watching in this lesson, and where she paused it (seconds).
+  videoBlockId         String?   @map("video_block_id") @db.Uuid
+  videoPositionSeconds Int?      @map("video_position_seconds")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+
+  @@unique([enrollmentId, lessonId])
+  @@index([lessonId])
+  @@map("lesson_progress")
+}
+
+/// A week that is OPEN for an enrollment: opened by her progress, or early by an instructor / admin.
+/// Once a week has opened for a student it stays open, even if lessons are added to the course later.
+/// `weekId` is the permanent id of a week in a PUBLISHED course version (no link to draft tables).
+/// `unlockedById` is a plain id (users are never deleted), so no User relation is needed.
+model WeekUnlock {
+  id           String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  enrollmentId String           @map("enrollment_id") @db.Uuid
+  weekId       String           @map("week_id") @db.Uuid
+  source       WeekUnlockSource
+  /// For an early opening: who did it, and why (both required by the database).
+  unlockedById String?          @map("unlocked_by_id") @db.Uuid
+  reason       String?          @db.VarChar(300)
+  createdAt    DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+
+  @@unique([enrollmentId, weekId])
+  @@map("week_unlocks")
 }

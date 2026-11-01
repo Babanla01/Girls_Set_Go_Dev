@@ -26,6 +26,7 @@ import { Env, validateEnv } from './config/env.validation';
 import { CourseContentModule } from './course-content/course-content.module';
 import { HealthModule } from './health/health.module';
 import { InstructorModule } from './instructor/instructor.module';
+import { LearningModule } from './learning/learning.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { PublicModule } from './public/public.module';
 import { RedisModule } from './redis/redis.module';
@@ -110,6 +111,7 @@ import { StudentsModule } from './students/students.module';
     AdminModule,
     InstructorModule,
     CourseContentModule,
+    LearningModule,
     StudentsModule,
     PublicModule,
     HealthModule,
