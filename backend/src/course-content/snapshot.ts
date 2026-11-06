@@ -2,8 +2,11 @@
  * snapshot.ts
  * ---------------------------------------------------------------------------
  * A SNAPSHOT is a frozen picture of a whole course copy: every week, every
- * lesson in it and every block in each lesson, in order. A published version IS
- * a snapshot; the draft is turned into one whenever we need to compare it.
+ * lesson in it and every block in each lesson, in order - plus each week's
+ * assignment (with its rubric) and live class, when it has them. A published
+ * version IS a snapshot; the draft is turned into one whenever we need to compare it.
+ * (Versions published before assignments existed simply have none: the two new
+ * fields are optional, so every older version is still read correctly.)
  *
  * Positions are implied by the order of the lists, so a snapshot never has gaps
  * or duplicate positions. Every item keeps its permanent id, which is how two
@@ -32,12 +35,41 @@ export interface SnapshotLesson {
   blocks: SnapshotBlock[];
 }
 
+/** A week's assignment. There is at most one per week. */
+export interface SnapshotAssignment {
+  id: string;
+  title: string;
+  brief: string;
+  includes: string[];
+  successEvidence: string | null;
+  expectedMinutes: number | null;
+  allowedFileTypes: string[];
+  /** { criteria: [ { key, name, levels: [ { score, description } ] } ] } (see assignment-data.ts) */
+  rubric: Prisma.JsonObject;
+  rubricVisible: boolean;
+  originId: string | null;
+}
+
+/** A week's live class. The assignment's due date is worked out from it. */
+export interface SnapshotClassSession {
+  id: string;
+  /** The exact start, as an ISO text such as "2026-10-06T22:00:00.000Z". */
+  startsAt: string;
+  durationMinutes: number;
+  joinUrl: string | null;
+  notes: string | null;
+  originId: string | null;
+}
+
 export interface SnapshotWeek {
   id: string;
   title: string;
   summary: string | null;
   originId: string | null;
   lessons: SnapshotLesson[];
+  /** Missing in versions published before assignments existed. */
+  assignment?: SnapshotAssignment | null;
+  classSession?: SnapshotClassSession | null;
 }
 
 export interface Snapshot {
@@ -66,11 +98,44 @@ export async function loadDraft(db: DbClient, contentId: string): Promise<DraftL
   const weeks = await db.courseWeek.findMany({ where: { contentId }, orderBy: order });
   const lessons = await db.courseLesson.findMany({ where: { contentId }, orderBy: order });
   const blocks = await db.lessonBlock.findMany({ where: { contentId }, orderBy: order });
+  const assignments = await db.courseAssignment.findMany({ where: { contentId } });
+  const sessions = await db.courseClassSession.findMany({ where: { contentId } });
 
   const meta = new Map<string, ItemMeta>();
-  for (const row of [...weeks, ...lessons, ...blocks]) {
+  for (const row of [...weeks, ...lessons, ...blocks, ...assignments, ...sessions]) {
     meta.set(row.id, { editedById: row.editedById, updatedAt: row.updatedAt });
   }
+
+  const assignmentByWeek = new Map<string, SnapshotAssignment>(
+    assignments.map((row) => [
+      row.weekId,
+      {
+        id: row.id,
+        title: row.title,
+        brief: row.brief,
+        includes: row.includes,
+        successEvidence: row.successEvidence,
+        expectedMinutes: row.expectedMinutes,
+        allowedFileTypes: row.allowedFileTypes,
+        rubric: row.rubric as Prisma.JsonObject,
+        rubricVisible: row.rubricVisible,
+        originId: row.originId,
+      },
+    ]),
+  );
+  const sessionByWeek = new Map<string, SnapshotClassSession>(
+    sessions.map((row) => [
+      row.weekId,
+      {
+        id: row.id,
+        startsAt: row.startsAt.toISOString(),
+        durationMinutes: row.durationMinutes,
+        joinUrl: row.joinUrl,
+        notes: row.notes,
+        originId: row.originId,
+      },
+    ]),
+  );
 
   const blocksByLesson = new Map<string, SnapshotBlock[]>();
   for (const block of blocks) {
@@ -108,6 +173,8 @@ export async function loadDraft(db: DbClient, contentId: string): Promise<DraftL
         summary: week.summary,
         originId: week.originId,
         lessons: lessonsByWeek.get(week.id) ?? [],
+        assignment: assignmentByWeek.get(week.id) ?? null,
+        classSession: sessionByWeek.get(week.id) ?? null,
       })),
     },
     meta,

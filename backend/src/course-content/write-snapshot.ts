@@ -15,6 +15,10 @@
  *                    pointing at the same lesson.
  *
  * Positions are written as 1, 2, 3 ... from the order of the lists.
+ *
+ * A week's ASSIGNMENT travels with it in both cases. A week's LIVE CLASS (its date and
+ * time) is written only when restoring: a cohort's copy made from a template starts
+ * with no class dates, because every cohort has its own schedule.
  */
 import type { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
@@ -36,6 +40,8 @@ export async function writeSnapshot(
   const weekRows: Prisma.CourseWeekCreateManyInput[] = [];
   const lessonRows: Prisma.CourseLessonCreateManyInput[] = [];
   const blockRows: Prisma.LessonBlockCreateManyInput[] = [];
+  const assignmentRows: Prisma.CourseAssignmentCreateManyInput[] = [];
+  const classRows: Prisma.CourseClassSessionCreateManyInput[] = [];
 
   // Copying: new id, origin = the id it came from. Restoring: same id, same origin.
   const identify = (id: string, originId: string | null) =>
@@ -50,6 +56,33 @@ export async function writeSnapshot(
       title: week.title,
       summary: week.summary,
     });
+
+    if (week.assignment) {
+      assignmentRows.push({
+        ...identify(week.assignment.id, week.assignment.originId),
+        contentId,
+        weekId: weekIdentity.id,
+        title: week.assignment.title,
+        brief: week.assignment.brief,
+        includes: week.assignment.includes,
+        successEvidence: week.assignment.successEvidence,
+        expectedMinutes: week.assignment.expectedMinutes,
+        allowedFileTypes: week.assignment.allowedFileTypes,
+        rubric: week.assignment.rubric as Prisma.InputJsonObject,
+        rubricVisible: week.assignment.rubricVisible,
+      });
+    }
+    if (week.classSession && !options.freshIds) {
+      classRows.push({
+        ...identify(week.classSession.id, week.classSession.originId),
+        contentId,
+        weekId: weekIdentity.id,
+        startsAt: new Date(week.classSession.startsAt),
+        durationMinutes: week.classSession.durationMinutes,
+        joinUrl: week.classSession.joinUrl,
+        notes: week.classSession.notes,
+      });
+    }
 
     week.lessons.forEach((lesson, lessonIndex) => {
       const lessonIdentity = identify(lesson.id, lesson.originId);
@@ -79,6 +112,8 @@ export async function writeSnapshot(
 
   // Parents first, so every lesson and block finds its week / lesson.
   if (weekRows.length > 0) await db.courseWeek.createMany({ data: weekRows });
+  if (assignmentRows.length > 0) await db.courseAssignment.createMany({ data: assignmentRows });
+  if (classRows.length > 0) await db.courseClassSession.createMany({ data: classRows });
   if (lessonRows.length > 0) await db.courseLesson.createMany({ data: lessonRows });
   if (blockRows.length > 0) await db.lessonBlock.createMany({ data: blockRows });
 

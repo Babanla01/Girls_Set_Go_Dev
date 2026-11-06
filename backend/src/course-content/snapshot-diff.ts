@@ -12,6 +12,10 @@
  * An item that was both edited and moved is reported once, as EDITED, with a
  * "position" entry among its changed fields.
  *
+ * Each week's ASSIGNMENT and LIVE CLASS (at most one of each) are compared too: they
+ * are reported as ADDED, REMOVED or EDITED, with the fields that changed (the rubric
+ * counts as one field).
+ *
  * To keep the list readable, the CONTENTS of an added or removed week or lesson
  * are not listed one by one: the week / lesson is reported once, with a count of
  * what is inside it.
@@ -24,7 +28,7 @@ import type { BlockType } from '@prisma/client';
 
 import type { Snapshot, SnapshotBlock, SnapshotLesson, SnapshotWeek } from './snapshot';
 
-export type ItemKind = 'WEEK' | 'LESSON' | 'BLOCK';
+export type ItemKind = 'WEEK' | 'LESSON' | 'BLOCK' | 'ASSIGNMENT' | 'CLASS';
 export type ChangeType = 'ADDED' | 'REMOVED' | 'EDITED' | 'MOVED';
 
 export interface LineDiff {
@@ -239,7 +243,36 @@ const countLesson = (lesson: SnapshotLesson) => ({ blocks: lesson.blocks.length 
 const countWeek = (week: SnapshotWeek) => ({
   lessons: week.lessons.length,
   blocks: week.lessons.reduce((total, lesson) => total + lesson.blocks.length, 0),
+  assignment: week.assignment ? 1 : 0,
+  classSession: week.classSession ? 1 : 0,
 });
+
+const ASSIGNMENT_FIELDS = ['title', 'brief', 'includes', 'successEvidence', 'expectedMinutes', 'allowedFileTypes', 'rubric', 'rubricVisible'];
+const CLASS_FIELDS = ['startsAt', 'durationMinutes', 'joinUrl', 'notes'];
+
+/** Compares the one-per-week item (assignment or live class) of two versions of the same week. */
+function diffSingle<T extends { id: string }>(
+  kind: ItemKind,
+  noun: string,
+  before: T | null,
+  after: T | null,
+  fields: readonly string[],
+  weekTitle: string,
+  label: (item: T) => string,
+): Change[] {
+  const where = { week: weekTitle, lesson: null };
+  if (!before && !after) return [];
+  if (!before && after) {
+    return [{ kind, type: 'ADDED', id: after.id, title: label(after), where, fields: [{ field: noun, before: null, after: true }] }];
+  }
+  if (before && !after) {
+    return [{ kind, type: 'REMOVED', id: before.id, title: label(before), where, fields: [{ field: noun, before: true, after: null }] }];
+  }
+
+  const current = after as T;
+  const changed = differences(fields, before as unknown as Record<string, unknown>, current as unknown as Record<string, unknown>);
+  return changed.length > 0 ? [{ kind, type: 'EDITED', id: current.id, title: label(current), where, fields: changed }] : [];
+}
 
 /** Ids that exist in both lists, in the order of `source`. */
 const common = (source: readonly string[], other: ReadonlySet<string>): string[] => source.filter((id) => other.has(id));
@@ -345,18 +378,29 @@ export function diffSnapshots(before: Snapshot, after: Snapshot): Change[] {
     }
   }
 
+  // ---------------------------------------- assignments and live classes
+  // (For a week that is new or removed, they are covered by that week's own entry.)
+  for (const week of after.weeks) {
+    const old = was.weeks.get(week.id)?.week;
+    if (!old) continue;
+    changes.push(
+      ...diffSingle('ASSIGNMENT', 'assignment', old.assignment ?? null, week.assignment ?? null, ASSIGNMENT_FIELDS, week.title, (item) => item.title),
+      ...diffSingle('CLASS', 'classSession', old.classSession ?? null, week.classSession ?? null, CLASS_FIELDS, week.title, () => 'Live class'),
+    );
+  }
+
   return changes;
 }
 
 // ------------------------------------------------------------------ summaries
 
-const NOUN: Record<ItemKind, string> = { WEEK: 'week', LESSON: 'lesson', BLOCK: 'block' };
+const NOUN: Record<ItemKind, string> = { WEEK: 'week', LESSON: 'lesson', BLOCK: 'block', ASSIGNMENT: 'assignment', CLASS: 'class session' };
 const VERB: Record<ChangeType, string> = { EDITED: 'edited', ADDED: 'added', REMOVED: 'removed', MOVED: 'moved' };
 
 /** "2 lessons edited, 1 block added" - a plain description of what a list of changes contains. */
 export function summarizeChanges(changes: readonly Change[]): string {
   const parts: string[] = [];
-  for (const kind of ['WEEK', 'LESSON', 'BLOCK'] as const) {
+  for (const kind of ['WEEK', 'LESSON', 'BLOCK', 'ASSIGNMENT', 'CLASS'] as const) {
     for (const type of ['EDITED', 'ADDED', 'REMOVED', 'MOVED'] as const) {
       const total = changes.filter((change) => change.kind === kind && change.type === type).length;
       if (total > 0) parts.push(`${total} ${NOUN[kind]}${total === 1 ? '' : 's'} ${VERB[type]}`);
@@ -372,6 +416,8 @@ export interface ChangeCounts {
   weeks: number;
   lessons: number;
   blocks: number;
+  assignments: number;
+  classSessions: number;
 }
 
 export function countChanges(changes: readonly Change[]): ChangeCounts {
@@ -380,6 +426,8 @@ export function countChanges(changes: readonly Change[]): ChangeCounts {
     weeks: changes.filter((change) => change.kind === 'WEEK').length,
     lessons: changes.filter((change) => change.kind === 'LESSON').length,
     blocks: changes.filter((change) => change.kind === 'BLOCK').length,
+    assignments: changes.filter((change) => change.kind === 'ASSIGNMENT').length,
+    classSessions: changes.filter((change) => change.kind === 'CLASS').length,
   };
 }
 

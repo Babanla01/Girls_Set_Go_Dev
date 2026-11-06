@@ -77,6 +77,15 @@ const envSchema = z.object({
   SMTP_PASSWORD: optionalText,
   // The "From" of every email, e.g.  Girls Set Go <no-reply@yourdomain.org>
   MAIL_FROM: optionalText,
+
+  // --- WEB: file storage (website pictures, shop photos, private uploads) ---------
+  // The folder where files are kept. Default: "./storage" (next to where the API runs).
+  STORAGE_DIR: optionalText,
+  // Optional separate secret for signed file links (32+ characters). When empty, one is
+  // derived from SESSION_SECRET, which is fine to start with.
+  FILES_SIGNING_SECRET: optionalText.refine((value) => value === undefined || value.length >= 32, {
+    message: 'must be at least 32 characters long',
+  }),
 });
 
 /** The validated, correctly-typed settings object used across the app. */

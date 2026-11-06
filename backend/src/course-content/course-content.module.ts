@@ -3,7 +3,8 @@
  * ---------------------------------------------------------------------------
  * Building a course: its master template, each cohort's own copy, the weeks,
  * lessons and blocks inside them (the draft content), publishing them as numbered
- * versions, going back (restore / discard), and the admin's course catalog.
+ * versions, going back (restore / discard), each week's assignment and live class,
+ * and the admin's course catalog.
  *
  * It also REGISTERS the ownership rule "who may open / edit a course copy" with
  * the permission framework (deny by default):
@@ -24,6 +25,8 @@ import { CourseCatalogController } from './course-catalog.controller';
 import { CourseCatalogService } from './course-catalog.service';
 import { CourseContentController } from './course-content.controller';
 import { CourseContentService } from './course-content.service';
+import { CoursePlanningController } from './course-planning.controller';
+import { CoursePlanningService } from './course-planning.service';
 import { CourseRestoreController } from './course-restore.controller';
 import { CourseRestoreService } from './course-restore.service';
 import { CourseStructureService } from './course-structure.service';
@@ -32,7 +35,7 @@ import { LessonBlocksService } from './lesson-blocks.service';
 
 @Module({
   imports: [AuthModule],
-  controllers: [CourseContentController, CourseRestoreController, CourseCatalogController],
+  controllers: [CourseContentController, CourseRestoreController, CoursePlanningController, CourseCatalogController],
   providers: [
     ContentEditor,
     CourseContentService,
@@ -40,6 +43,7 @@ import { LessonBlocksService } from './lesson-blocks.service';
     LessonBlocksService,
     CourseVersionsService,
     CourseRestoreService,
+    CoursePlanningService,
     CourseCatalogService,
   ],
   exports: [ContentEditor, CourseVersionsService],

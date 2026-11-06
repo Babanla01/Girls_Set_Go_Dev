@@ -16,3 +16,4 @@ uploads/
 .idea/
 .vscode/
 *.log
+backend/storage/

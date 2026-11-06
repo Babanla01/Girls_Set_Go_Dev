@@ -1,6 +1,9 @@
 // ============================================================================
 // prisma/schema.prisma - Girls Set Go LMS database structure
 //
+// MERGED FILE = LMS core + course content/versions/progress/assignments
+//               + WEB section (CMS, media library, platform settings).
+//
 // This file describes the tables to Prisma (so the code is type-safe).
 // The matching SQL lives in prisma/migrations/. A few rules that Prisma cannot
 // express (CHECK rules, "partial" unique indexes, triggers) are written by hand
@@ -137,6 +140,30 @@ enum EnrollmentStatus {
   WITHDRAWN
 }
 
+/// (WEB) Folders of the media library. The folder is the first part of an image's fixed key.
+enum CmsMediaFolder {
+  BRAND
+  BANNERS
+  SITE
+  PEOPLE
+  PROJECTS
+  PRODUCTS
+  VIDEOS
+}
+
+/// (WEB) DRAFT = being prepared, invisible to visitors; PUBLISHED = live on the website.
+enum CmsContentStatus {
+  DRAFT
+  PUBLISHED
+}
+
+/// (WEB) Where a public profile appears: team (about page), instructor (cohort page) or both.
+enum CmsPersonKind {
+  TEAM
+  INSTRUCTOR
+  BOTH
+}
+
 // -------------------------------------------------------------------- models
 
 /// Every person who can sign in: students, instructors and admins.
@@ -178,6 +205,14 @@ model User {
   enrollmentsMade             Enrollment[]            @relation("EnrollmentCreatedBy")
   /// Course copies this person last edited.
   courseContentsEdited        CourseContent[]         @relation("ContentEditedBy")
+
+  // --- relations: WEB (owner: WEB account - website editor, announcements, forms, shop, platform layer) ---
+  cmsMediaCreated             CmsMediaAsset[]         @relation("CmsMediaCreatedBy")
+  cmsPeopleCreated            CmsPerson[]             @relation("CmsPersonCreatedBy")
+  /// The public profile of this instructor (if one was made).
+  cmsPersonProfile            CmsPerson?              @relation("CmsPersonInstructor")
+  platformSettingsUpdated     PlatformSetting[]       @relation("PlatformSettingUpdatedBy")
+  // --- end relations: WEB ---
 
   @@index([role, status])
   @@map("users")
@@ -339,7 +374,7 @@ model Track {
   @@map("tracks")
 }
 
-/// What is taught inside a track. Modules and lessons attach to it in a later batch.
+/// What is taught inside a track. Weeks, lessons and blocks attach through CourseContent.
 model Course {
   id          String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   trackId     String       @map("track_id") @db.Uuid
@@ -534,11 +569,11 @@ model CourseContent {
   createdAt           DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt           DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  course     Course       @relation(fields: [courseId], references: [id], onDelete: Restrict)
-  cohort     Cohort?      @relation(fields: [cohortId], references: [id], onDelete: Restrict)
-  lastEditedBy User?      @relation("ContentEditedBy", fields: [lastEditedById], references: [id], onDelete: Restrict)
-  weeks      CourseWeek[]
-  versions   CourseVersion[]
+  course       Course          @relation(fields: [courseId], references: [id], onDelete: Restrict)
+  cohort       Cohort?         @relation(fields: [cohortId], references: [id], onDelete: Restrict)
+  lastEditedBy User?           @relation("ContentEditedBy", fields: [lastEditedById], references: [id], onDelete: Restrict)
+  weeks        CourseWeek[]
+  versions     CourseVersion[]
 
   @@index([courseId])
   @@map("course_contents")
@@ -562,6 +597,9 @@ model CourseWeek {
 
   content CourseContent  @relation(fields: [contentId], references: [id], onDelete: Cascade)
   lessons CourseLesson[]
+  /// At most one assignment and one live class per week (Batch 4).
+  assignment   CourseAssignment?
+  classSession CourseClassSession?
 
   @@unique([id, contentId])
   @@index([contentId, position])
@@ -697,4 +735,167 @@ model WeekUnlock {
 
   @@unique([enrollmentId, weekId])
   @@map("week_unlocks")
+}
+
+// ------------------------------------------------------ assignments (part of the course content)
+
+/// A week's assignment (at most one per week): the brief, what to include, the file types allowed,
+/// and the four-criterion rubric. Part of the DRAFT; frozen into every published version.
+model CourseAssignment {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contentId        String   @map("content_id") @db.Uuid
+  weekId           String   @map("week_id") @db.Uuid
+  title            String   @db.VarChar(150)
+  /// The brief shown to students.
+  brief            String   @db.VarChar(5000)
+  /// The numbered "What to include" list (up to 10 items).
+  includes         String[]
+  successEvidence  String?  @map("success_evidence") @db.VarChar(1000)
+  expectedMinutes  Int?     @map("expected_minutes")
+  /// File types a student may upload (a link and a written note are always accepted).
+  allowedFileTypes String[] @map("allowed_file_types")
+  /// { criteria: [ { key, name, levels: [ { score, description } ] } ] } - see assignment-data.ts.
+  rubric           Json
+  /// Whether students can see the rubric.
+  rubricVisible    Boolean  @default(true) @map("rubric_visible")
+  originId         String?  @map("origin_id") @db.Uuid
+  revision         Int      @default(1)
+  /// Who last changed it (filled in by a database trigger).
+  editedById       String?  @map("edited_by_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  week CourseWeek @relation(fields: [weekId, contentId], references: [id, contentId], onDelete: Cascade)
+
+  @@unique([weekId, contentId])
+  @@index([contentId])
+  @@map("course_assignments")
+}
+
+/// A week's live class (at most one per week). The assignment's due date is worked out from it:
+/// 3 days after class at 5:00 PM Central, with 7 more days when late work is still accepted.
+model CourseClassSession {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contentId       String   @map("content_id") @db.Uuid
+  weekId          String   @map("week_id") @db.Uuid
+  /// The exact start (entered as Chicago time, stored as an instant).
+  startsAt        DateTime @map("starts_at") @db.Timestamptz(3)
+  durationMinutes Int      @map("duration_minutes")
+  joinUrl         String?  @map("join_url") @db.VarChar(2000)
+  notes           String?  @db.VarChar(500)
+  originId        String?  @map("origin_id") @db.Uuid
+  revision        Int      @default(1)
+  editedById      String?  @map("edited_by_id") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  week CourseWeek @relation(fields: [weekId, contentId], references: [id, contentId], onDelete: Cascade)
+
+  @@unique([weekId, contentId])
+  @@index([contentId])
+  @@map("course_class_sessions")
+}
+
+// ============================================================================
+// WEB section (owner: WEB account)
+// Website editor (CMS), announcements, forms, shop, and the shared platform
+// layer. Model names here start with Platform / Cms / Ann / Form / Shop so they
+// can never collide with the LMS models above. Do not edit LMS models from here.
+// ============================================================================
+
+/// One row per setting that an admin changed. A setting with no row uses its
+/// default (defaults live in code, next to the rule that checks the value).
+model PlatformSetting {
+  key         String   @id @db.VarChar(100)
+  value       Json
+  updatedById String?  @map("updated_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  updatedBy User? @relation("PlatformSettingUpdatedBy", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  @@map("platform_settings")
+}
+
+/// One image in the media library. Its KEY (e.g. "people/queen-tane.jpg") never
+/// changes, even when the picture is replaced, so pages never break.
+model CmsMediaAsset {
+  id                String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// "<folder>/<name>.<ext>", lowercase. Unique and permanent.
+  key               String         @unique @db.VarChar(150)
+  folder            CmsMediaFolder
+  title             String         @db.VarChar(120)
+  originalFilename  String         @map("original_filename") @db.VarChar(200)
+  contentType       String         @map("content_type") @db.VarChar(50)
+  sizeBytes         Int            @map("size_bytes")
+  width             Int
+  height            Int
+  /// Required: what a screen reader says about the picture.
+  altText           String         @map("alt_text") @db.VarChar(250)
+  /// When someone confirmed the people shown agreed to be published (required for PEOPLE and PROJECTS).
+  consentRecordedAt DateTime?      @map("consent_recorded_at") @db.Timestamptz(3)
+  /// Goes up each time the picture is replaced; it is part of the public URL so browsers fetch the new one.
+  version           Int            @default(1)
+  /// SHA-256 of the stored picture.
+  checksum          String         @db.Char(64)
+  createdById       String?        @map("created_by_id") @db.Uuid
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy User?           @relation("CmsMediaCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  usages    CmsMediaUsage[]
+  people    CmsPerson[]
+
+  @@index([folder, createdAt])
+  @@map("cms_media_assets")
+}
+
+/// "This picture is used here." A picture that is in use cannot be deleted.
+model CmsMediaUsage {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assetId    String   @map("asset_id") @db.Uuid
+  /// What uses it: "person", "page", "banner", "video", "product"...
+  entityType String   @map("entity_type") @db.VarChar(30)
+  entityId   String   @map("entity_id") @db.VarChar(64)
+  /// Which part of that thing, e.g. "photo".
+  field      String   @db.VarChar(60)
+  /// Human label shown in the "used on" list, e.g. "Person: Queen Tane".
+  label      String   @db.VarChar(200)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  asset CmsMediaAsset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+
+  @@unique([assetId, entityType, entityId, field])
+  @@index([entityType, entityId])
+  @@map("cms_media_usages")
+}
+
+/// A public profile on the website: a team member and/or an instructor.
+/// It stays a DRAFT until it is complete (the database refuses a published
+/// profile without a title and a photo).
+model CmsPerson {
+  id                 String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fullName           String           @map("full_name") @db.VarChar(120)
+  title              String           @default("") @db.VarChar(120)
+  subtitle           String?          @db.VarChar(120)
+  kind               CmsPersonKind    @default(TEAM)
+  bio                String           @default("") @db.VarChar(280)
+  photoAssetId       String?          @map("photo_asset_id") @db.Uuid
+  showOnAbout        Boolean          @default(true) @map("show_on_about")
+  showOnCohort       Boolean          @default(false) @map("show_on_cohort")
+  displayOrder       Int              @default(0) @map("display_order")
+  status             CmsContentStatus @default(DRAFT)
+  publishedAt        DateTime?        @map("published_at") @db.Timestamptz(3)
+  /// Set when this profile belongs to an instructor account of the learning portal.
+  linkedInstructorId String?          @unique @map("linked_instructor_id") @db.Uuid
+  createdById        String?          @map("created_by_id") @db.Uuid
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  photo            CmsMediaAsset? @relation(fields: [photoAssetId], references: [id], onDelete: Restrict)
+  linkedInstructor User?          @relation("CmsPersonInstructor", fields: [linkedInstructorId], references: [id], onDelete: Restrict)
+  createdBy        User?          @relation("CmsPersonCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([status, displayOrder])
+  @@map("cms_people")
 }
