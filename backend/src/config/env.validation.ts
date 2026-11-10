@@ -53,6 +53,11 @@ const envSchema = z.object({
   // 32+ characters so the signing key cannot be guessed by brute force.
   SESSION_SECRET: z.string().min(32, 'must be at least 32 characters long'),
 
+  // Secret used to sign temporary file-download links (see signed-url.service.ts).
+  // Kept SEPARATE from SESSION_SECRET on purpose: if one key ever leaks, the other
+  // area (logins vs. file links) is still safe. Same 32+ character rule.
+  FILES_SIGNING_SECRET: z.string().min(32, 'must be at least 32 characters long'),
+
   // Feature switch: lets people apply to become instructors through a public
   // form. OFF by default. Accounts are still always created by an admin.
   INSTRUCTOR_APPLICATIONS_ENABLED: z
@@ -63,6 +68,10 @@ const envSchema = z.object({
   LOG_LEVEL: z
     .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'])
     .default('info'),
+
+  // Where uploaded files (students' submissions) are kept on disk. In PRODUCTION this must be a
+  // persistent folder or volume that survives a redeploy, or uploaded files are lost.
+  STORAGE_DIR: z.string().min(1).default('./storage'),
 
   // --- Real email sending (all optional: with no SMTP_HOST, emails just stay in
   // the outbox and, in development, their links are printed in the terminal). ---
@@ -77,15 +86,6 @@ const envSchema = z.object({
   SMTP_PASSWORD: optionalText,
   // The "From" of every email, e.g.  Girls Set Go <no-reply@yourdomain.org>
   MAIL_FROM: optionalText,
-
-  // --- WEB: file storage (website pictures, shop photos, private uploads) ---------
-  // The folder where files are kept. Default: "./storage" (next to where the API runs).
-  STORAGE_DIR: optionalText,
-  // Optional separate secret for signed file links (32+ characters). When empty, one is
-  // derived from SESSION_SECRET, which is fine to start with.
-  FILES_SIGNING_SECRET: optionalText.refine((value) => value === undefined || value.length >= 32, {
-    message: 'must be at least 32 characters long',
-  }),
 });
 
 /** The validated, correctly-typed settings object used across the app. */
@@ -106,13 +106,26 @@ export function validateEnv(raw: Record<string, unknown>): Env {
   }
 
   // Extra production safety: never run production with an obviously unsafe secret.
-  if (
-    result.data.NODE_ENV === 'production' &&
-    result.data.SESSION_SECRET.toLowerCase().includes('replace-me')
-  ) {
-    throw new Error(
-      'Invalid environment configuration:\n  - SESSION_SECRET: still contains the example placeholder',
-    );
+  // Both secrets are checked, so a copied ".env.example" can never reach production.
+  if (result.data.NODE_ENV === 'production') {
+    const secrets = {
+      SESSION_SECRET: result.data.SESSION_SECRET,
+      FILES_SIGNING_SECRET: result.data.FILES_SIGNING_SECRET,
+    };
+    for (const [name, value] of Object.entries(secrets)) {
+      if (value.toLowerCase().includes('replace-me')) {
+        throw new Error(
+          `Invalid environment configuration:\n  - ${name}: still contains the example placeholder`,
+        );
+      }
+    }
+
+    // Reusing one key for two jobs defeats the point of having two.
+    if (result.data.SESSION_SECRET === result.data.FILES_SIGNING_SECRET) {
+      throw new Error(
+        'Invalid environment configuration:\n  - FILES_SIGNING_SECRET: must be different from SESSION_SECRET',
+      );
+    }
   }
 
   // Mail settings must be complete, or the email sender would fail later in a confusing way.

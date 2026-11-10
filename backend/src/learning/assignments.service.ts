@@ -2,7 +2,7 @@
  * assignments.service.ts  (the student's side)
  * ---------------------------------------------------------------------------
  * The student's assignments: the list ("All assignments / To do / Submitted / Feedback")
- * and one assignment's detail.
+ * and one assignment's detail with her submission.
  *
  *  - Students only see the assignments of the LIVE PUBLISHED version of their own cohort's course.
  *  - An assignment in a LOCKED week shows only its title and why it is locked - never its brief.
@@ -10,31 +10,43 @@
  *    answer carries exact instants plus the timezone, so the screen can show both
  *    "Fri, Oct 9 at 5:00 PM Central" and the student's own local time.
  *  - The rubric is sent only when the instructor made it visible to students.
+ *  - "canSubmit" and the notice come from the SAME rule that decides a submit, so the screen
+ *    can never promise something the server will refuse.
  *
- * Submitting work, receipts and feedback arrive in the next parts of this batch; until then
- * every unlocked assignment is "Not submitted".
+ * The four tabs:
+ *   All        everything
+ *   To do      not submitted yet, or the instructor asked for changes
+ *   Submitted  sent and waiting to be looked at
+ *   Feedback   reviewed, needs changes, or completed
  */
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { formatCalendarDate } from '../catalog/catalog.util';
-import { PrismaService } from '../prisma/prisma.service';
-import { CLOSED_MESSAGE, LATE_MESSAGE, phaseAt, scheduleFor } from './assignment-rules';
-import { LearningAccessService, LearningContext } from './learning-access.service';
-import { evaluateWeeks, WeekProgress } from './learning-rules';
-import { cohortNotStartedMessage, NOT_OPEN_MESSAGE, NOT_READY_MESSAGE } from './learning.constants';
-import { PublishedCourseService } from './published-course.service';
-import type { Snapshot, SnapshotAssignment, SnapshotWeek } from '../course-content/snapshot';
+import type { SnapshotAssignment, SnapshotWeek } from '../course-content/snapshot';
+import { AssignmentContextService } from './assignment-context.service';
+import { LATE_MESSAGE, phaseAt, scheduleFor, submitDecision } from './assignment-rules';
+import type { LearningContext } from './learning-access.service';
+import type { WeekProgress } from './learning-rules';
+import { SubmissionsService, SubmissionSummary } from './submissions.service';
 
 export type AssignmentTab = 'all' | 'todo' | 'submitted' | 'feedback';
 export const ASSIGNMENT_TABS: readonly AssignmentTab[] = ['all', 'todo', 'submitted', 'feedback'];
 
+type ItemStatus = 'LOCKED' | 'NOT_SUBMITTED' | 'SUBMITTED' | 'REVIEWED' | 'NEEDS_REVISION' | 'COMPLETED';
+
+const TAB_FILTERS: Record<AssignmentTab, (status: ItemStatus) => boolean> = {
+  all: () => true,
+  todo: (status) => status === 'NOT_SUBMITTED' || status === 'NEEDS_REVISION',
+  submitted: (status) => status === 'SUBMITTED',
+  feedback: (status) => status === 'REVIEWED' || status === 'NEEDS_REVISION' || status === 'COMPLETED',
+};
+
 @Injectable()
 export class AssignmentsService {
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly access: LearningAccessService,
-    private readonly published: PublishedCourseService,
+    private readonly context: AssignmentContextService,
+    private readonly submissions: SubmissionsService,
   ) {}
 
   // -------------------------------------------------------------------- list
@@ -42,25 +54,23 @@ export class AssignmentsService {
   async list(user: AuthenticatedUser, tab: AssignmentTab) {
     if (!ASSIGNMENT_TABS.includes(tab)) throw new BadRequestException(`tab must be one of: ${ASSIGNMENT_TABS.join(', ')}.`);
 
-    const context = await this.requireReady(user);
-    const { snapshot, weeks } = await this.load(context);
+    const ctx = await this.context.requireReady(user);
+    const [{ snapshot, weeks }, submitted] = await Promise.all([this.context.load(ctx), this.submissions.summaries(ctx.enrollmentId)]);
     const now = new Date();
 
     const items = snapshot.weeks.flatMap((week, index) => {
       if (!week.assignment) return [];
-      return [this.summarize(week, week.assignment, weeks[index], context, now)];
+      return [this.summarize(week, week.assignment, weeks[index], ctx, now, submitted.get(week.assignment.id) ?? null)];
     });
 
-    // Nothing is submitted or reviewed yet, so only "all" and "to do" can have rows.
-    const visible = tab === 'all' ? items : tab === 'todo' ? items.filter((item) => item.status === 'NOT_SUBMITTED') : [];
-    return { tab, assignments: visible };
+    return { tab, assignments: items.filter((item) => TAB_FILTERS[tab](item.status)) };
   }
 
   // ------------------------------------------------------------------ detail
 
   async detail(user: AuthenticatedUser, assignmentId: string) {
-    const context = await this.requireReady(user);
-    const { snapshot, weeks } = await this.load(context);
+    const ctx = await this.context.requireReady(user);
+    const { snapshot, weeks } = await this.context.load(ctx);
 
     const index = snapshot.weeks.findIndex((week) => week.assignment?.id === assignmentId);
     const week = snapshot.weeks[index];
@@ -69,7 +79,8 @@ export class AssignmentsService {
 
     const progress = weeks[index];
     const now = new Date();
-    const summary = this.summarize(week, assignment, progress, context, now);
+    const submitted = (await this.submissions.summaries(ctx.enrollmentId)).get(assignmentId) ?? null;
+    const summary = this.summarize(week, assignment, progress, ctx, now, submitted);
 
     // A locked week: the title and the reason only.
     if (!progress.open) {
@@ -98,24 +109,43 @@ export class AssignmentsService {
       status: summary.status,
       schedule: summary.schedule,
       canSubmit: summary.canSubmit,
-      notice: summary.phase === 'LATE' ? LATE_MESSAGE : summary.phase === 'CLOSED' ? CLOSED_MESSAGE : null,
-      readOnly: context.readOnly,
+      // Why she cannot send (closed, complete...), or a gentle heads-up when it will be marked Late.
+      notice: summary.decision?.reason ?? (summary.decision?.isLate ? LATE_MESSAGE : null),
+      readOnly: ctx.readOnly,
+      submission: await this.submissions.fullView(ctx.enrollmentId, assignmentId),
     };
   }
 
   // ----------------------------------------------------------------- helpers
 
-  private summarize(week: SnapshotWeek, assignment: SnapshotAssignment, progress: WeekProgress, context: LearningContext, now: Date) {
+  private summarize(
+    week: SnapshotWeek,
+    assignment: SnapshotAssignment,
+    progress: WeekProgress,
+    ctx: LearningContext,
+    now: Date,
+    submission: SubmissionSummary | null,
+  ) {
     const schedule = scheduleFor(week.classSession ? new Date(week.classSession.startsAt) : null);
     const phase = phaseAt(schedule, now);
-    const open = progress.open;
+    const decision =
+      progress.open && !ctx.readOnly
+        ? submitDecision({
+            phase,
+            status: submission?.status ?? null,
+            revisionOpenUntil: submission?.revisionOpenUntil ?? null,
+            now,
+            versionCount: submission?.versionCount ?? 0,
+          })
+        : null;
+    const status: ItemStatus = !progress.open ? 'LOCKED' : (submission?.status ?? 'NOT_SUBMITTED');
 
     return {
       id: assignment.id,
       title: assignment.title,
       expectedMinutes: assignment.expectedMinutes,
       week: { id: week.id, position: progress.position, title: week.title },
-      status: open ? ('NOT_SUBMITTED' as const) : ('LOCKED' as const),
+      status,
       phase,
       schedule: {
         timezone: schedule.timezone,
@@ -124,39 +154,18 @@ export class AssignmentsService {
         closesAt: schedule.closesAt,
         phase,
       },
-      canSubmit: open && !context.readOnly && phase !== 'CLOSED',
-      cohortStartsOn: formatCalendarDate(context.cohort.startsOn),
+      canSubmit: decision?.allowed ?? false,
+      decision,
+      submission: submission
+        ? {
+            reference: submission.reference,
+            version: submission.version,
+            isLate: submission.isLate,
+            submittedAt: submission.submittedAt,
+            revisionOpenUntil: submission.revisionOpenUntil,
+          }
+        : null,
+      cohortStartsOn: formatCalendarDate(ctx.cohort.startsOn),
     };
-  }
-
-  private async load(context: LearningContext): Promise<{ snapshot: Snapshot; weeks: WeekProgress[] }> {
-    const snapshot = await this.published.get(context.contentId, context.version);
-    const [done, opened] = await Promise.all([
-      this.prisma.lessonProgress.findMany({
-        where: { enrollmentId: context.enrollmentId, completedAt: { not: null } },
-        select: { lessonId: true },
-      }),
-      this.prisma.weekUnlock.findMany({ where: { enrollmentId: context.enrollmentId }, select: { weekId: true } }),
-    ]);
-    const weeks = evaluateWeeks(snapshot, {
-      completed: new Set(done.map((row) => row.lessonId)),
-      unlocked: new Set(opened.map((row) => row.weekId)),
-      allOpen: context.readOnly,
-    });
-    return { snapshot, weeks };
-  }
-
-  private async requireReady(user: AuthenticatedUser): Promise<LearningContext> {
-    const access = await this.access.resolve(user);
-    switch (access.kind) {
-      case 'READY':
-        return access.context;
-      case 'NOT_STARTED':
-        throw new ForbiddenException(cohortNotStartedMessage(formatCalendarDate(access.cohort.startsOn)));
-      case 'NOT_READY':
-        throw new ConflictException(NOT_READY_MESSAGE);
-      default:
-        throw new ForbiddenException(NOT_OPEN_MESSAGE);
-    }
   }
 }
