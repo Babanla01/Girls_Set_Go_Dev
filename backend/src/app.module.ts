@@ -27,12 +27,14 @@ import { CourseContentModule } from './course-content/course-content.module';
 import { HealthModule } from './health/health.module';
 import { InstructorModule } from './instructor/instructor.module';
 import { LearningModule } from './learning/learning.module';
+import { PlatformModule } from './platform/platform.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { PublicModule } from './public/public.module';
 import { RedisModule } from './redis/redis.module';
 import { RedisService } from './redis/redis.service';
 import { RetentionModule } from './retention/retention.module';
 import { StudentsModule } from './students/students.module';
+import { WebModule } from './web/web.module';
 
 @Module({
   imports: [
@@ -105,6 +107,9 @@ import { StudentsModule } from './students/students.module';
     // removal of declined applicants' data (run by "npm run retention:run").
     EmailModule,
     RetentionModule,
+    // Shared building blocks (settings, file storage, signed links) used by BOTH the
+    // website side and the learning portal.
+    PlatformModule,
 
     // 6) Feature modules
     AuthModule,
@@ -115,6 +120,8 @@ import { StudentsModule } from './students/students.module';
     StudentsModule,
     PublicModule,
     HealthModule,
+    // The website side: website editor, announcements, forms and shop (WEB account).
+    WebModule,
   ],
   providers: [
     // GUARDS run on EVERY route, in this exact order:
