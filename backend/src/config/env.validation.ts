@@ -86,6 +86,15 @@ const envSchema = z.object({
   SMTP_PASSWORD: optionalText,
   // The "From" of every email, e.g.  Girls Set Go <no-reply@yourdomain.org>
   MAIL_FROM: optionalText,
+
+  // --- WEB: website refresh (optional). When an admin publishes a page, the API tells the
+  // public website to refresh it. Give both settings, or neither. ---
+  FRONTEND_REVALIDATE_URL: optionalText.refine((value) => value === undefined || /^https?:\/\//.test(value), {
+    message: 'must start with http:// or https://',
+  }),
+  FRONTEND_REVALIDATE_SECRET: optionalText.refine((value) => value === undefined || value.length >= 16, {
+    message: 'must be at least 16 characters long',
+  }),
 });
 
 /** The validated, correctly-typed settings object used across the app. */
@@ -136,6 +145,13 @@ export function validateEnv(raw: Record<string, unknown>): Env {
   if (Boolean(SMTP_USER) !== Boolean(SMTP_PASSWORD)) {
     throw new Error(
       'Invalid environment configuration:\n  - SMTP_USER and SMTP_PASSWORD: give both, or neither',
+    );
+  }
+
+  // The website refresh needs both its address and its secret.
+  if (Boolean(result.data.FRONTEND_REVALIDATE_URL) !== Boolean(result.data.FRONTEND_REVALIDATE_SECRET)) {
+    throw new Error(
+      'Invalid environment configuration:\n  - FRONTEND_REVALIDATE_URL and FRONTEND_REVALIDATE_SECRET: give both, or neither',
     );
   }
 

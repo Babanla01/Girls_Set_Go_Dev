@@ -222,6 +222,9 @@ model User {
   /// The public profile of this instructor (if one was made).
   cmsPersonProfile            CmsPerson?              @relation("CmsPersonInstructor")
   platformSettingsUpdated     PlatformSetting[]       @relation("PlatformSettingUpdatedBy")
+  cmsPagesCreated             CmsPage[]               @relation("CmsPageCreatedBy")
+  cmsPagesEdited              CmsPage[]               @relation("CmsPageEditedBy")
+  cmsPageVersionsPublished    CmsPageVersion[]        @relation("CmsPageVersionPublishedBy")
   // --- end relations: WEB ---
 
   @@index([role, status])
@@ -997,4 +1000,66 @@ model CmsPerson {
 
   @@index([status, displayOrder])
   @@map("cms_people")
+}
+
+/// A page of the public website (Home, About, Tech Bootcamp ...). It has a working
+/// copy (the DRAFT) that only admins see, and numbered PUBLISHED versions. What
+/// visitors see is always one frozen version, never the draft.
+model CmsPage {
+  id                     String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// The address on the website, e.g. "/", "/about", "/programs/tech-bootcamp". Lowercase, unique.
+  path                   String           @unique @db.VarChar(120)
+  /// The name shown in the admin list (also the default page title for search engines).
+  title                  String           @db.VarChar(150)
+  /// The working copy: { seo: {...}, sections: [...] }. Visitors never see it.
+  draft                  Json
+  /// Goes up by one on every change to the draft. Stops two admins overwriting each other.
+  draftRevision          Int              @default(0) @map("draft_revision")
+  lastEditedById         String?          @map("last_edited_by_id") @db.Uuid
+  lastEditedAt           DateTime?        @map("last_edited_at") @db.Timestamptz(3)
+  /// PUBLISHED = a version is live; DRAFT = not live (never published, or taken offline).
+  status                 CmsContentStatus @default(DRAFT)
+  /// The LIVE version number. Empty when the page is not live.
+  publishedVersion       Int?             @map("published_version")
+  publishedAt            DateTime?        @map("published_at") @db.Timestamptz(3)
+  /// The draft revision at the moment of the last publish. If the draft revision is higher
+  /// now, the page has "draft changes" that are not live yet.
+  publishedDraftRevision Int?             @map("published_draft_revision")
+  createdById            String?          @map("created_by_id") @db.Uuid
+  createdAt              DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  createdBy  User?            @relation("CmsPageCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  lastEditedBy User?          @relation("CmsPageEditedBy", fields: [lastEditedById], references: [id], onDelete: Restrict)
+  versions   CmsPageVersion[]
+
+  @@index([status, updatedAt])
+  @@map("cms_pages")
+}
+
+/// One PUBLISHED version of a page: a frozen snapshot of its title, search settings and
+/// sections, with who published it and a short summary of what changed. Versions are never
+/// changed or deleted (the database refuses), so every version stays restorable.
+model CmsPageVersion {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pageId          String   @map("page_id") @db.Uuid
+  /// 1, 2, 3 ... per page.
+  number          Int
+  /// What the publisher wrote ("Updated the dates"). Optional.
+  note            String?  @db.VarChar(500)
+  /// An automatic description such as "1 section added, 2 changed".
+  summary         String   @db.VarChar(500)
+  /// { title, seo, sections } exactly as published.
+  snapshot        Json
+  sectionCount    Int      @map("section_count")
+  publishedById   String   @map("published_by_id") @db.Uuid
+  /// The role that person had at the time.
+  publishedByRole Role     @map("published_by_role")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  page        CmsPage @relation(fields: [pageId], references: [id], onDelete: Restrict)
+  publishedBy User    @relation("CmsPageVersionPublishedBy", fields: [publishedById], references: [id], onDelete: Restrict)
+
+  @@unique([pageId, number])
+  @@map("cms_page_versions")
 }
