@@ -2,8 +2,8 @@
 // prisma/schema.prisma - Girls Set Go LMS database structure
 //
 // MERGED FILE = LMS core + course content/versions/progress/assignments
-//               + file storage & student submissions
-//               + WEB section (CMS, media library, platform settings).
+//               + file storage & student submissions + submission reviews
+//               + WEB section (CMS pages, media library, platform settings).
 //
 // This file describes the tables to Prisma (so the code is type-safe).
 // The matching SQL lives in prisma/migrations/. A few rules that Prisma cannot
@@ -97,6 +97,13 @@ enum WeekUnlockSource {
 /// instructor's review (next part of Batch 4).
 enum SubmissionStatus {
   SUBMITTED
+  REVIEWED
+  NEEDS_REVISION
+  COMPLETED
+}
+
+/// What an instructor decides when reviewing a submission.
+enum ReviewOutcome {
   REVIEWED
   NEEDS_REVISION
   COMPLETED
@@ -876,6 +883,8 @@ model SubmissionVersion {
 
   submission Submission       @relation(fields: [submissionId], references: [id], onDelete: Restrict)
   files      SubmissionFile[]
+  /// The instructor's review of this version (at most one).
+  review     SubmissionReview?
 
   @@unique([submissionId, number])
   @@map("submission_versions")
@@ -896,6 +905,38 @@ model SubmissionFile {
   @@unique([versionId, fileId])
   @@index([fileId])
   @@map("submission_files")
+}
+
+// ------------------------------------------------------ reviews of student submissions
+
+/// An instructor's review of ONE version of a submission: four rubric scores (1 to 4), one strength,
+/// one next step and the outcome. Its author can edit it for 24 hours (checked by the application and
+/// audited); it is never deleted. `reviewerId` is a plain id (users are never deleted).
+model SubmissionReview {
+  id                 String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  submissionId       String        @map("submission_id") @db.Uuid
+  versionNumber      Int           @map("version_number")
+  reviewerId         String        @map("reviewer_id") @db.Uuid
+  scoreUnderstanding Int           @map("score_understanding") @db.SmallInt
+  scoreExecution     Int           @map("score_execution") @db.SmallInt
+  scoreTesting       Int           @map("score_testing") @db.SmallInt
+  scoreCommunication Int           @map("score_communication") @db.SmallInt
+  /// One thing the student did well.
+  strength           String        @db.VarChar(500)
+  /// One thing to do next.
+  nextStep           String        @map("next_step") @db.VarChar(500)
+  outcome            ReviewOutcome
+  /// Only for NEEDS_REVISION: days the student was given to resubmit.
+  revisionDays       Int?          @map("revision_days")
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// Set when the author edited it (within 24 hours).
+  editedAt           DateTime?     @map("edited_at") @db.Timestamptz(3)
+
+  version SubmissionVersion @relation(fields: [submissionId, versionNumber], references: [submissionId, number], onDelete: Restrict)
+
+  @@unique([submissionId, versionNumber])
+  @@index([reviewerId, createdAt])
+  @@map("submission_reviews")
 }
 
 // ============================================================================
@@ -1029,9 +1070,9 @@ model CmsPage {
   createdAt              DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt              DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  createdBy  User?            @relation("CmsPageCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  lastEditedBy User?          @relation("CmsPageEditedBy", fields: [lastEditedById], references: [id], onDelete: Restrict)
-  versions   CmsPageVersion[]
+  createdBy    User?            @relation("CmsPageCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  lastEditedBy User?            @relation("CmsPageEditedBy", fields: [lastEditedById], references: [id], onDelete: Restrict)
+  versions     CmsPageVersion[]
 
   @@index([status, updatedAt])
   @@map("cms_pages")

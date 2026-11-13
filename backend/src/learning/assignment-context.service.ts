@@ -13,8 +13,9 @@ import { formatCalendarDate } from '../catalog/catalog.util';
 import type { Snapshot } from '../course-content/snapshot';
 import { PrismaService } from '../prisma/prisma.service';
 import { LearningAccessService, LearningContext } from './learning-access.service';
-import { evaluateWeeks, WeekProgress } from './learning-rules';
+import type { WeekProgress } from './learning-rules';
 import { cohortNotStartedMessage, NOT_OPEN_MESSAGE, NOT_READY_MESSAGE } from './learning.constants';
+import { ProgressStateService } from './progress-state.service';
 import { PublishedCourseService } from './published-course.service';
 
 @Injectable()
@@ -23,6 +24,7 @@ export class AssignmentContextService {
     private readonly prisma: PrismaService,
     private readonly access: LearningAccessService,
     private readonly published: PublishedCourseService,
+    private readonly progress: ProgressStateService,
   ) {}
 
   async requireReady(user: AuthenticatedUser): Promise<LearningContext> {
@@ -41,18 +43,7 @@ export class AssignmentContextService {
 
   async load(context: LearningContext): Promise<{ snapshot: Snapshot; weeks: WeekProgress[] }> {
     const snapshot = await this.published.get(context.contentId, context.version);
-    const [done, opened] = await Promise.all([
-      this.prisma.lessonProgress.findMany({
-        where: { enrollmentId: context.enrollmentId, completedAt: { not: null } },
-        select: { lessonId: true },
-      }),
-      this.prisma.weekUnlock.findMany({ where: { enrollmentId: context.enrollmentId }, select: { weekId: true } }),
-    ]);
-    const weeks = evaluateWeeks(snapshot, {
-      completed: new Set(done.map((row) => row.lessonId)),
-      unlocked: new Set(opened.map((row) => row.weekId)),
-      allOpen: context.readOnly,
-    });
-    return { snapshot, weeks };
+    const state = await this.progress.load(this.prisma, context.enrollmentId, snapshot);
+    return { snapshot, weeks: this.progress.evaluate(snapshot, state, context.readOnly) };
   }
 }

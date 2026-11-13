@@ -21,7 +21,6 @@
  *    can never delete it.
  */
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { WeekUnlockSource } from '@prisma/client';
 
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { formatCalendarDate } from '../catalog/catalog.util';
@@ -31,7 +30,6 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { VideoPositionDto } from './dto/video-position.dto';
 import { LearningAccessService, LearningContext } from './learning-access.service';
 import {
-  evaluateWeeks,
   findNextLesson,
   locateLesson,
   neighbours,
@@ -44,6 +42,7 @@ import {
   NOT_READY_MESSAGE,
   READ_ONLY_MESSAGE,
 } from './learning.constants';
+import { ProgressStateService } from './progress-state.service';
 import { PublishedCourseService } from './published-course.service';
 
 @Injectable()
@@ -52,6 +51,7 @@ export class LearningService {
     private readonly prisma: PrismaService,
     private readonly access: LearningAccessService,
     private readonly published: PublishedCourseService,
+    private readonly progress: ProgressStateService,
   ) {}
 
   // ---------------------------------------------------------------- overview
@@ -159,15 +159,15 @@ export class LearningService {
     const snapshot = await this.published.get(context.contentId, context.version);
 
     return this.prisma.$transaction(async (tx) => {
-      const { completed, unlocked } = await this.loadProgress(tx, context.enrollmentId);
-      const before = evaluateWeeks(snapshot, { completed, unlocked });
+      const state = await this.progress.load(tx, context.enrollmentId, snapshot);
+      const before = this.progress.evaluate(snapshot, state);
 
       const found = locateLesson(before, lessonId);
       if (!found) throw new NotFoundException('Lesson not found.');
       this.assertWeekOpen(found.week);
 
       // Completion time is never overwritten, so pressing the button again changes nothing.
-      const newlyCompleted = !completed.has(lessonId);
+      const newlyCompleted = !state.completed.has(lessonId);
       if (newlyCompleted) {
         await tx.$executeRaw`
           INSERT INTO "lesson_progress" ("id", "enrollment_id", "lesson_id", "completed_at", "updated_at")
@@ -176,23 +176,13 @@ export class LearningService {
           DO UPDATE SET "completed_at" = COALESCE("lesson_progress"."completed_at", EXCLUDED."completed_at"),
                         "updated_at"   = now()
         `;
-        completed.add(lessonId);
+        state.completed.add(lessonId);
       }
 
-      const after = evaluateWeeks(snapshot, { completed, unlocked });
+      const after = this.progress.evaluate(snapshot, state);
 
       // Weeks that just opened: remember it, so they stay open whatever happens to the course later.
-      const justOpened = after.filter((week, index) => week.open && !before[index].open);
-      if (justOpened.length > 0) {
-        await tx.weekUnlock.createMany({
-          data: justOpened.map((week) => ({
-            enrollmentId: context.enrollmentId,
-            weekId: week.id,
-            source: WeekUnlockSource.PROGRESS,
-          })),
-          skipDuplicates: true,
-        });
-      }
+      const justOpened = await this.progress.recordOpenings(tx, context.enrollmentId, before, after);
 
       const stored = await tx.lessonProgress.findUniqueOrThrow({
         where: { enrollmentId_lessonId: { enrollmentId: context.enrollmentId, lessonId } },
@@ -265,16 +255,7 @@ export class LearningService {
   }
 
   private async weeksFor(db: DbClient, context: LearningContext, snapshot: Snapshot): Promise<WeekProgress[]> {
-    const { completed, unlocked } = await this.loadProgress(db, context.enrollmentId);
-    return evaluateWeeks(snapshot, { completed, unlocked, allOpen: context.readOnly });
-  }
-
-  /** The lessons she completed and the weeks already opened for her (two quick queries). */
-  private async loadProgress(db: DbClient, enrollmentId: string): Promise<{ completed: Set<string>; unlocked: Set<string> }> {
-    const [done, opened] = await Promise.all([
-      db.lessonProgress.findMany({ where: { enrollmentId, completedAt: { not: null } }, select: { lessonId: true } }),
-      db.weekUnlock.findMany({ where: { enrollmentId }, select: { weekId: true } }),
-    ]);
-    return { completed: new Set(done.map((row) => row.lessonId)), unlocked: new Set(opened.map((row) => row.weekId)) };
+    const state = await this.progress.load(db, context.enrollmentId, snapshot);
+    return this.progress.evaluate(snapshot, state, context.readOnly);
   }
 }

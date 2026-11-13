@@ -112,7 +112,7 @@ export class AssignmentsService {
       // Why she cannot send (closed, complete...), or a gentle heads-up when it will be marked Late.
       notice: summary.decision?.reason ?? (summary.decision?.isLate ? LATE_MESSAGE : null),
       readOnly: ctx.readOnly,
-      submission: await this.submissions.fullView(ctx.enrollmentId, assignmentId),
+      submission: await this.submissions.fullView(ctx.enrollmentId, assignmentId, user.id),
     };
   }
 

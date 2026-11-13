@@ -33,7 +33,7 @@ import { memoryStorage } from 'multer';
 import { AuthenticatedUser, getRequestContext } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { MAX_UPLOAD_BYTES } from '../storage/storage.constants';
+import { MAX_UPLOAD_BYTES } from './uploads/upload.constants';
 import { SubmitDto } from './dto/submit.dto';
 import { AssignmentTab, AssignmentsService } from './assignments.service';
 import { MAX_SUBMISSION_FILES } from './submission.constants';

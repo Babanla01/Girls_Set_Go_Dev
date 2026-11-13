@@ -21,7 +21,7 @@ import { COURSE_CONTENT_MANAGE } from '../course-content/course-content.constant
 import type { ManageResource } from '../course-content/content-editor.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { EarlyOpenDto } from './dto/early-open.dto';
-import { evaluateWeeks } from './learning-rules';
+import { ProgressStateService } from './progress-state.service';
 import { PublishedCourseService } from './published-course.service';
 
 @Injectable()
@@ -31,6 +31,7 @@ export class WeekUnlockService {
     private readonly policy: PolicyService,
     private readonly audit: AuditService,
     private readonly published: PublishedCourseService,
+    private readonly progress: ProgressStateService,
   ) {}
 
   async openEarly(user: AuthenticatedUser, enrollmentId: string, dto: EarlyOpenDto, context: RequestContext) {
@@ -61,14 +62,8 @@ export class WeekUnlockService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
-        const [done, opened] = await Promise.all([
-          tx.lessonProgress.findMany({ where: { enrollmentId, completedAt: { not: null } }, select: { lessonId: true } }),
-          tx.weekUnlock.findMany({ where: { enrollmentId }, select: { weekId: true } }),
-        ]);
-        const weeks = evaluateWeeks(snapshot, {
-          completed: new Set(done.map((row) => row.lessonId)),
-          unlocked: new Set(opened.map((row) => row.weekId)),
-        });
+        const state = await this.progress.load(tx, enrollmentId, snapshot);
+        const weeks = this.progress.evaluate(snapshot, state);
 
         const week = weeks.find((candidate) => candidate.id === dto.weekId);
         if (!week) throw new NotFoundException('Week not found in this course.');

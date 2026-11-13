@@ -24,6 +24,7 @@ import { OutboxModule } from './common/outbox/outbox.module';
 import { OriginGuard } from './common/security/origin.guard';
 import { Env, validateEnv } from './config/env.validation';
 import { CourseContentModule } from './course-content/course-content.module';
+import { GradingModule } from './grading/grading.module';
 import { HealthModule } from './health/health.module';
 import { InstructorModule } from './instructor/instructor.module';
 import { LearningModule } from './learning/learning.module';
@@ -117,6 +118,7 @@ import { WebModule } from './web/web.module';
     InstructorModule,
     CourseContentModule,
     LearningModule,
+    GradingModule,
     StudentsModule,
     PublicModule,
     HealthModule,

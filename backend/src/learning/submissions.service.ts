@@ -32,9 +32,9 @@ import type { AuthenticatedUser, RequestContext } from '../auth/auth.types';
 import { AuditService } from '../common/audit/audit.service';
 import { parseHttpUrl } from '../course-content/block-data';
 import { PrismaService } from '../prisma/prisma.service';
-import { StorageService, StoredFileView } from '../storage/storage.service';
-import { MAX_UPLOAD_BYTES } from '../storage/storage.constants';
-import { checkUploads, IncomingFile } from '../storage/upload-checks';
+import { StoredFileView, SubmissionFilesService } from './submission-files.service';
+import { MAX_UPLOAD_BYTES } from './uploads/upload.constants';
+import { checkUploads, IncomingFile } from './uploads/upload-checks';
 import { AssignmentContextService } from './assignment-context.service';
 import { phaseAt, scheduleFor, submitDecision } from './assignment-rules';
 import type { SubmitDto } from './dto/submit.dto';
@@ -57,7 +57,7 @@ export class SubmissionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly context: AssignmentContextService,
-    private readonly storage: StorageService,
+    private readonly files: SubmissionFilesService,
     private readonly audit: AuditService,
   ) {}
 
@@ -117,7 +117,7 @@ export class SubmissionsService {
     try {
       for (const file of checked.files) {
         saved.push(
-          await this.storage.save({
+          await this.files.save({
             name: file.name,
             contentType: file.contentType,
             buffer: file.buffer,
@@ -191,7 +191,7 @@ export class SubmissionsService {
       throw error;
     }
 
-    return { submission: await this.fullView(ctx.enrollmentId, assignmentId) };
+    return { submission: await this.fullView(ctx.enrollmentId, assignmentId, user.id) };
   }
 
   // ------------------------------------------------------------------- views
@@ -232,8 +232,8 @@ export class SubmissionsService {
     );
   }
 
-  /** The whole submission - every version with its files and fresh short-lived links. */
-  async fullView(enrollmentId: string, assignmentId: string) {
+  /** The whole submission - every version with its files and fresh short-lived links made for `viewerId`. */
+  async fullView(enrollmentId: string, assignmentId: string, viewerId: string) {
     const submission = await this.prisma.submission.findUnique({
       where: { enrollmentId_assignmentId: { enrollmentId, assignmentId } },
       select: {
@@ -251,7 +251,7 @@ export class SubmissionsService {
             createdAt: true,
             files: {
               orderBy: { position: 'asc' },
-              select: { file: { select: { id: true, originalName: true, contentType: true, sizeBytes: true } } },
+              select: { file: { select: { id: true, originalName: true, contentType: true, sizeBytes: true, storageKey: true } } },
             },
           },
         },
@@ -275,7 +275,7 @@ export class SubmissionsService {
           name: file.originalName,
           contentType: file.contentType,
           sizeBytes: file.sizeBytes,
-          url: this.storage.linkFor(file.id), // works for a few minutes, made fresh on every request
+          url: this.files.linkFor(file, viewerId), // made for this person only; works for a few minutes
         })),
       })),
     };
@@ -286,7 +286,7 @@ export class SubmissionsService {
   private async discard(saved: readonly StoredFileView[]): Promise<void> {
     for (const file of saved) {
       try {
-        await this.storage.remove(file.id);
+        await this.files.remove(file.id);
       } catch {
         // Best effort: a leftover file nobody refers to is harmless and can be swept later.
       }
