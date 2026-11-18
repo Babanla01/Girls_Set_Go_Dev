@@ -9,7 +9,8 @@ coverage/
 !.env.example
 
 # Local file storage used during development
-uploads/
+/uploads/
+/backend/uploads/
 
 # Editor / OS noise
 .DS_Store
