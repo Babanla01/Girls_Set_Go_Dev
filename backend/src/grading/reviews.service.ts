@@ -19,14 +19,20 @@
  *          - The FIRST review of a week's assignment opens the next week for the student, when her
  *            lessons are complete (any outcome counts). The opening is recorded, so it stays open.
  *          - The answer includes the next submission in the queue.
+ *          - The student gets an EMAIL (queued in the same transaction, so it is never lost or sent
+ *            for something that was rolled back) when the review is first saved and when an edit
+ *            changes the outcome. It never contains the feedback or the scores (see review-email.ts).
  *
  * Who: admins, and the instructors of that student's cohort (checked on every request).
  */
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { EnrollmentStatus, SubmissionReview, SubmissionStatus } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
+import { AccountStatus, EnrollmentStatus, SubmissionReview, SubmissionStatus } from '@prisma/client';
 
 import type { AuthenticatedUser, RequestContext } from '../auth/auth.types';
 import { AuditService } from '../common/audit/audit.service';
+import { OutboxEmail, OutboxService } from '../common/outbox/outbox.service';
+import type { Env } from '../config/env.validation';
 import { PrismaService } from '../prisma/prisma.service';
 import { phaseAt, scheduleFor } from '../learning/assignment-rules';
 import type { WeekProgress } from '../learning/learning-rules';
@@ -36,6 +42,7 @@ import { SubmissionFilesService } from '../learning/submission-files.service';
 import type { ReviewDto } from './dto/review.dto';
 import { GradingScopeService } from './grading-scope.service';
 import { InboxService } from './inbox.service';
+import { buildReviewEmailPayload, assignmentPageUrl, shouldEmail } from './review-email';
 import { editDecision, revisionDaysFor } from './review-rules';
 
 const DAY_MS = 86_400_000;
@@ -57,6 +64,8 @@ export class ReviewsService {
     private readonly progress: ProgressStateService,
     private readonly files: SubmissionFilesService,
     private readonly audit: AuditService,
+    private readonly outbox: OutboxService,
+    private readonly config: ConfigService<Env, true>,
   ) {}
 
   // ------------------------------------------------------------------ detail
@@ -172,13 +181,21 @@ export class ReviewsService {
       where: { id: submissionId },
       select: {
         id: true,
+        assignmentId: true,
+        versions: { orderBy: { number: 'desc' }, take: 1, select: { courseVersion: true } },
         enrollment: {
-          select: { id: true, status: true, cohort: { select: { id: true, courseContent: { select: { id: true, publishedVersion: true } } } } },
+          select: {
+            id: true,
+            status: true,
+            student: { select: { fullName: true, email: true, status: true } },
+            cohort: { select: { id: true, courseContent: { select: { id: true, publishedVersion: true } } } },
+          },
         },
       },
     });
     if (!submission) throw new NotFoundException('Submission not found.');
     const { enrollment } = submission;
+    const { student } = enrollment;
     await this.scope.assertCanGrade(user, enrollment.cohort.id);
 
     const revision = revisionDaysFor(dto.outcome, dto.revisionDays);
@@ -187,6 +204,10 @@ export class ReviewsService {
     // The live course, to work out which week this review opens (none if nothing is published).
     const content = enrollment.cohort.courseContent;
     const live = content && content.publishedVersion !== null ? await this.published.get(content.id, content.publishedVersion) : null;
+
+    // The assignment's title for the email, from the course version the student answered.
+    const answered = content && submission.versions[0] ? await this.published.get(content.id, submission.versions[0].courseVersion).catch(() => null) : null;
+    const assignmentTitle = answered?.weeks.map((week) => week.assignment).find((candidate) => candidate?.id === submission.assignmentId)?.title ?? 'your assignment';
 
     const saved = await this.prisma.$transaction(async (tx) => {
       // Take turns with the student (a new version) and with other reviewers.
@@ -248,6 +269,29 @@ export class ReviewsService {
         opened = await this.progress.recordOpenings(tx, enrollment.id, before, after);
       }
 
+      // Tell the student (queued in this same transaction): on the first review, or when an edit changes the outcome.
+      let email: OutboxEmail | null = null;
+      if (
+        student.status === AccountStatus.ACTIVE &&
+        shouldEmail({ existedBefore: existing !== null, previousOutcome: existing?.outcome ?? null, outcome: dto.outcome })
+      ) {
+        email = {
+          toEmail: student.email,
+          template: 'submission-reviewed',
+          payload: buildReviewEmailPayload({
+            fullName: student.fullName,
+            assignmentTitle,
+            outcome: dto.outcome,
+            updated: existing !== null,
+            revisionOpenUntil: updated.revisionOpenUntil,
+            actionUrl: assignmentPageUrl(this.config.get('APP_URL', { infer: true }), submission.assignmentId),
+          }),
+          entityType: 'submission',
+          entityId: submissionId,
+        };
+        await this.outbox.enqueue(email, tx);
+      }
+
       await this.audit.record(
         {
           actorId: user.id,
@@ -262,11 +306,15 @@ export class ReviewsService {
         tx,
       );
 
-      return { review, updated, opened, edited: existing !== null };
+      return { review, updated, opened, edited: existing !== null, email };
     });
+
+    // Development only: print the email's link in the terminal (never in production).
+    if (saved.email) this.outbox.previewInDevelopment(saved.email);
 
     return {
       edited: saved.edited,
+      emailQueued: saved.email !== null,
       review: this.reviewView(saved.review, user.fullName, user, new Date()),
       submission: { id: submissionId, reference: saved.updated.reference, status: saved.updated.status, revisionOpenUntil: saved.updated.revisionOpenUntil },
       openedWeeks: saved.opened.map((week) => ({ id: week.id, position: week.position, title: week.title })),

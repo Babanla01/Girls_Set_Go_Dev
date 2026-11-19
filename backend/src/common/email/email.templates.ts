@@ -13,6 +13,9 @@
  *   - when a guardian is on file she gets a COPY of the received / accepted /
  *     declined emails, worded for her ("guardianCopy" in the values) and
  *     without any sign-in button;
+ *   - the review email ("submission-reviewed") never contains the feedback text or the
+ *     scores - it only says that feedback is ready (those stay in the portal, for the
+ *     privacy of students who are minors);
  *   - an unknown template, or a missing link where one is needed, returns
  *     null (the sender then marks the email as failed instead of sending
  *     something broken).
@@ -170,6 +173,38 @@ const BUILDERS: Record<string, (payload: Payload) => Content | null> = {
       paragraphs: ['We received a request to reset the password for your account.'],
       action: { label: 'Choose a new password', url },
       footer: `This link works once and expires in ${plural(minutes, 'minute')}. If you did not ask for this, you can ignore this email and your password will stay the same.`,
+    };
+  },
+
+  // Tells a student her work was reviewed. It never includes the feedback or the scores.
+  'submission-reviewed': (p) => {
+    const url = safeUrl(p.actionUrl);
+    if (!url) return null;
+
+    const title = str(p.assignmentTitle) || 'your assignment';
+    const outcome = str(p.outcome);
+    const updated = p.updated === true;
+
+    const paragraphs = [updated ? `Your instructor has updated their review of "${title}".` : `Your instructor has reviewed "${title}".`];
+    if (outcome === 'COMPLETED') {
+      paragraphs.push('It has been marked complete. Well done!');
+    } else if (outcome === 'NEEDS_REVISION') {
+      paragraphs.push(
+        str(p.resubmitBy)
+          ? `Your instructor suggests some changes. You can send a new version until ${str(p.resubmitBy)}.`
+          : 'Your instructor suggests some changes. You can send a new version.',
+      );
+    } else {
+      paragraphs.push('Your feedback is ready to read.');
+    }
+    paragraphs.push('Sign in to see your scores and feedback.');
+
+    return {
+      subject: updated ? `Update on your feedback: ${title}` : `You have feedback on ${title}`,
+      greeting: greeting(p),
+      paragraphs,
+      action: { label: 'See my feedback', url },
+      footer: 'For your privacy, we never put your feedback or scores in an email.',
     };
   },
 

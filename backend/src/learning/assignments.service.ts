@@ -26,6 +26,7 @@ import { formatCalendarDate } from '../catalog/catalog.util';
 import type { SnapshotAssignment, SnapshotWeek } from '../course-content/snapshot';
 import { AssignmentContextService } from './assignment-context.service';
 import { LATE_MESSAGE, phaseAt, scheduleFor, submitDecision } from './assignment-rules';
+import { OUTCOME_LABEL } from './feedback-view';
 import type { LearningContext } from './learning-access.service';
 import type { WeekProgress } from './learning-rules';
 import { SubmissionsService, SubmissionSummary } from './submissions.service';
@@ -112,7 +113,7 @@ export class AssignmentsService {
       // Why she cannot send (closed, complete...), or a gentle heads-up when it will be marked Late.
       notice: summary.decision?.reason ?? (summary.decision?.isLate ? LATE_MESSAGE : null),
       readOnly: ctx.readOnly,
-      submission: await this.submissions.fullView(ctx.enrollmentId, assignmentId, user.id),
+      submission: await this.submissions.fullView(ctx.enrollmentId, assignmentId, user.id, ctx.contentId),
     };
   }
 
@@ -163,6 +164,15 @@ export class AssignmentsService {
             isLate: submission.isLate,
             submittedAt: submission.submittedAt,
             revisionOpenUntil: submission.revisionOpenUntil,
+          }
+        : null,
+      /** The latest outcome, for the list row (the whole feedback is in the assignment's detail). */
+      feedback: submission?.review
+        ? {
+            outcome: submission.review.outcome,
+            outcomeLabel: OUTCOME_LABEL[submission.review.outcome],
+            reviewedAt: submission.review.reviewedAt,
+            editedAt: submission.review.editedAt,
           }
         : null,
       cohortStartsOn: formatCalendarDate(ctx.cohort.startsOn),

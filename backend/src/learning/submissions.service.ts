@@ -26,7 +26,7 @@
  * records are written in ONE transaction; if that fails, the saved files are removed again.
  */
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { SubmissionStatus } from '@prisma/client';
+import { ReviewOutcome, SubmissionStatus } from '@prisma/client';
 
 import type { AuthenticatedUser, RequestContext } from '../auth/auth.types';
 import { AuditService } from '../common/audit/audit.service';
@@ -38,7 +38,9 @@ import { checkUploads, IncomingFile } from './uploads/upload-checks';
 import { AssignmentContextService } from './assignment-context.service';
 import { phaseAt, scheduleFor, submitDecision } from './assignment-rules';
 import type { SubmitDto } from './dto/submit.dto';
+import { toStudentFeedback } from './feedback-view';
 import { READ_ONLY_MESSAGE } from './learning.constants';
+import { PublishedCourseService } from './published-course.service';
 import { MAX_SUBMISSION_FILES } from './submission.constants';
 
 /** What the assignment list shows about a submission. */
@@ -50,6 +52,8 @@ export interface SubmissionSummary {
   versionCount: number;
   isLate: boolean;
   submittedAt: Date;
+  /** The instructor's review of the latest version (null until there is one). */
+  review: { outcome: ReviewOutcome; reviewedAt: Date; editedAt: Date | null } | null;
 }
 
 @Injectable()
@@ -59,6 +63,7 @@ export class SubmissionsService {
     private readonly context: AssignmentContextService,
     private readonly files: SubmissionFilesService,
     private readonly audit: AuditService,
+    private readonly published: PublishedCourseService,
   ) {}
 
   // ------------------------------------------------------------------ submit
@@ -191,7 +196,7 @@ export class SubmissionsService {
       throw error;
     }
 
-    return { submission: await this.fullView(ctx.enrollmentId, assignmentId, user.id) };
+    return { submission: await this.fullView(ctx.enrollmentId, assignmentId, user.id, ctx.contentId) };
   }
 
   // ------------------------------------------------------------------- views
@@ -206,7 +211,11 @@ export class SubmissionsService {
         status: true,
         revisionOpenUntil: true,
         _count: { select: { versions: true } },
-        versions: { orderBy: { number: 'desc' }, take: 1, select: { number: true, isLate: true, createdAt: true } },
+        versions: {
+          orderBy: { number: 'desc' },
+          take: 1,
+          select: { number: true, isLate: true, createdAt: true, review: { select: { outcome: true, createdAt: true, editedAt: true } } },
+        },
       },
     });
 
@@ -225,6 +234,7 @@ export class SubmissionsService {
               versionCount: row._count.versions,
               isLate: latest.isLate,
               submittedAt: latest.createdAt,
+              review: latest.review ? { outcome: latest.review.outcome, reviewedAt: latest.review.createdAt, editedAt: latest.review.editedAt } : null,
             },
           ] as const,
         ];
@@ -232,8 +242,11 @@ export class SubmissionsService {
     );
   }
 
-  /** The whole submission - every version with its files and fresh short-lived links made for `viewerId`. */
-  async fullView(enrollmentId: string, assignmentId: string, viewerId: string) {
+  /**
+   * The whole submission - every version with its files (fresh short-lived links made for
+   * `viewerId`) and the instructor's feedback on it, as a STUDENT may see it (see feedback-view.ts).
+   */
+  async fullView(enrollmentId: string, assignmentId: string, viewerId: string, contentId: string) {
     const submission = await this.prisma.submission.findUnique({
       where: { enrollmentId_assignmentId: { enrollmentId, assignmentId } },
       select: {
@@ -253,31 +266,60 @@ export class SubmissionsService {
               orderBy: { position: 'asc' },
               select: { file: { select: { id: true, originalName: true, contentType: true, sizeBytes: true, storageKey: true } } },
             },
+            review: true,
           },
         },
       },
     });
     if (!submission || submission.versions.length === 0) return null;
 
+    // Who wrote the reviews (names only).
+    const reviewerIds = [...new Set(submission.versions.flatMap((version) => (version.review ? [version.review.reviewerId] : [])))];
+    const reviewers = reviewerIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: reviewerIds } }, select: { id: true, fullName: true } })
+      : [];
+    const reviewerName = new Map(reviewers.map((reviewer) => [reviewer.id, reviewer.fullName]));
+
+    const versions = await Promise.all(
+      submission.versions.map(async (version) => {
+        let feedback: ReturnType<typeof toStudentFeedback> | null = null;
+        if (version.review) {
+          // The rubric as it was when she answered (the course version recorded on this version).
+          const snapshot = await this.published.get(contentId, version.courseVersion).catch(() => null);
+          const assignment = snapshot?.weeks.map((week) => week.assignment).find((candidate) => candidate?.id === assignmentId) ?? null;
+          feedback = toStudentFeedback(
+            version.review,
+            reviewerName.get(version.review.reviewerId) ?? 'Your instructor',
+            assignment?.rubric ?? null,
+            assignment?.rubricVisible ?? false,
+          );
+        }
+
+        return {
+          number: version.number,
+          submittedAt: version.createdAt,
+          isLate: version.isLate,
+          courseVersion: version.courseVersion,
+          linkUrl: version.linkUrl,
+          note: version.note,
+          files: version.files.map(({ file }) => ({
+            id: file.id,
+            name: file.originalName,
+            contentType: file.contentType,
+            sizeBytes: file.sizeBytes,
+            url: this.files.linkFor(file, viewerId), // made for this person only; works for a few minutes
+          })),
+          /** The instructor's feedback on this version, or null while it waits for review. */
+          feedback,
+        };
+      }),
+    );
+
     return {
       reference: submission.reference,
       status: submission.status,
       revisionOpenUntil: submission.revisionOpenUntil,
-      versions: submission.versions.map((version) => ({
-        number: version.number,
-        submittedAt: version.createdAt,
-        isLate: version.isLate,
-        courseVersion: version.courseVersion,
-        linkUrl: version.linkUrl,
-        note: version.note,
-        files: version.files.map(({ file }) => ({
-          id: file.id,
-          name: file.originalName,
-          contentType: file.contentType,
-          sizeBytes: file.sizeBytes,
-          url: this.files.linkFor(file, viewerId), // made for this person only; works for a few minutes
-        })),
-      })),
+      versions,
     };
   }
 
