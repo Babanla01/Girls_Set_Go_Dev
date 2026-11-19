@@ -8,17 +8,17 @@
  * Safety:
  *  - a key can never point outside the storage folder (checked twice);
  *  - a file is written to a temporary name and then renamed, so a crash in the
- *    middle never leaves a half-written picture behind.
+ *    middle never leaves a half-written picture or video behind.
  */
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, relative, resolve, sep } from 'node:path';
 
 import type { Env } from '../../config/env.validation';
-import type { StorageProvider, StoredFile } from './storage.types';
+import type { ByteRange, StorageProvider, StoredFile } from './storage.types';
 
 @Injectable()
 export class LocalDiskStorage implements StorageProvider {
@@ -37,12 +37,40 @@ export class LocalDiskStorage implements StorageProvider {
     await rename(temporary, target);
   }
 
-  async open(key: string): Promise<StoredFile | null> {
+  async putFile(key: string, sourcePath: string): Promise<void> {
+    const target = this.pathOf(key);
+    await mkdir(dirname(target), { recursive: true });
+
+    // Copy (not move): the source may be on another disk. The copy is renamed into place at the end.
+    const temporary = `${target}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      await copyFile(sourcePath, temporary);
+      await rename(temporary, target);
+    } catch (error) {
+      await rm(temporary, { force: true });
+      throw error;
+    }
+  }
+
+  async open(key: string, range?: ByteRange): Promise<StoredFile | null> {
     const target = this.pathOf(key);
     try {
       const info = await stat(target);
       if (!info.isFile()) return null;
-      return { stream: createReadStream(target), size: info.size };
+      return {
+        stream: createReadStream(target, range ? { start: range.start, end: range.end } : undefined),
+        size: info.size,
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
+  async size(key: string): Promise<number | null> {
+    try {
+      const info = await stat(this.pathOf(key));
+      return info.isFile() ? info.size : null;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;

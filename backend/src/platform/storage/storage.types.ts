@@ -8,16 +8,28 @@
  */
 import type { Readable } from 'node:stream';
 
+/** A slice of a file: first and last byte, both included (like an HTTP "Range"). */
+export interface ByteRange {
+  start: number;
+  end: number;
+}
+
 export interface StoredFile {
+  /** The file's bytes - or only the asked-for slice, when a range was given. */
   stream: Readable;
+  /** The size of the WHOLE file (not of the slice). */
   size: number;
 }
 
 export interface StorageProvider {
   /** Saves (or overwrites) a file. */
   put(key: string, data: Buffer): Promise<void>;
-  /** Opens a file for streaming, or null when it does not exist. */
-  open(key: string): Promise<StoredFile | null>;
+  /** Saves a file that is already on disk, without loading it into memory (for large uploads). */
+  putFile(key: string, sourcePath: string): Promise<void>;
+  /** Opens a file for streaming (all of it, or one slice), or null when it does not exist. */
+  open(key: string, range?: ByteRange): Promise<StoredFile | null>;
+  /** The size of a file in bytes, or null when it does not exist. */
+  size(key: string): Promise<number | null>;
   /** Reads a whole file into memory, or null when it does not exist. */
   read(key: string): Promise<Buffer | null>;
   exists(key: string): Promise<boolean>;

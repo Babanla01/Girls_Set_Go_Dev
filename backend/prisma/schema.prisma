@@ -181,6 +181,34 @@ enum CmsPersonKind {
   BOTH
 }
 
+/// (WEB) Where a video's picture and sound come from: a file uploaded here, or an embedded YouTube / Vimeo video.
+enum CmsVideoSource {
+  UPLOAD
+  YOUTUBE
+  VIMEO
+}
+
+/// (WEB) The Creative Studio categories. Every video has ONE primary category and may carry more tags.
+enum CmsVideoCategory {
+  UI_UX_PROJECTS
+  AI_ROBOTICS
+  STUDENT_STORIES
+  BEHIND_THE_SCENES
+}
+
+/// (WEB) What a banner slide shows: a photo, or a muted looping video (with a photo until it loads).
+enum CmsBannerMediaType {
+  PHOTO
+  VIDEO
+}
+
+/// (WEB) The website pages that have a banner. Each page picks its own slides.
+enum CmsBannerPage {
+  HOME
+  COHORT_SHOWCASE
+  CREATIVE_STUDIO
+}
+
 // -------------------------------------------------------------------- models
 
 /// Every person who can sign in: students, instructors and admins.
@@ -232,6 +260,8 @@ model User {
   cmsPagesCreated             CmsPage[]               @relation("CmsPageCreatedBy")
   cmsPagesEdited              CmsPage[]               @relation("CmsPageEditedBy")
   cmsPageVersionsPublished    CmsPageVersion[]        @relation("CmsPageVersionPublishedBy")
+  cmsVideosCreated            CmsVideo[]              @relation("CmsVideoCreatedBy")
+  cmsBannerSlidesCreated      CmsBannerSlide[]        @relation("CmsBannerSlideCreatedBy")
   // --- end relations: WEB ---
 
   @@index([role, status])
@@ -964,7 +994,7 @@ model PlatformSetting {
 /// changes, even when the picture is replaced, so pages never break.
 model CmsMediaAsset {
   id                String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  /// "<folder>/<name>.<ext>", lowercase. Unique and permanent.
+  /// "<folder>/<n>.<ext>", lowercase. Unique and permanent.
   key               String         @unique @db.VarChar(150)
   folder            CmsMediaFolder
   title             String         @db.VarChar(120)
@@ -988,6 +1018,9 @@ model CmsMediaAsset {
   createdBy User?           @relation("CmsMediaCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   usages    CmsMediaUsage[]
   people    CmsPerson[]
+  /// Videos that use this picture as their thumbnail, and banner slides that show it.
+  videoThumbnails CmsVideo[]
+  bannerSlides    CmsBannerSlide[]
 
   @@index([folder, createdAt])
   @@map("cms_media_assets")
@@ -1103,4 +1136,108 @@ model CmsPageVersion {
 
   @@unique([pageId, number])
   @@map("cms_page_versions")
+}
+
+/// A video of the Creative Studio library. It stays a DRAFT until it is complete: captions, a
+/// thumbnail, a length and (when learners appear) recorded guardian consent. The database
+/// refuses a published video that is missing any of them.
+model CmsVideo {
+  id                  String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Lowercase words joined by dashes; used in addresses (/studio?video=<slug>) and file names.
+  slug                String           @unique @db.VarChar(80)
+  title               String           @db.VarChar(120)
+  source              CmsVideoSource
+  /// The primary category (what the video is filed under).
+  category            CmsVideoCategory
+  /// Extra tags; never includes the primary category.
+  alsoTagged          CmsVideoCategory[] @default([]) @map("also_tagged")
+  /// A short line shown when someone hovers over the video card (120 characters at most).
+  hoverDescription    String           @default("") @map("hover_description") @db.VarChar(120)
+  // --- an uploaded file (source UPLOAD) ---
+  fileKey             String?          @map("file_key") @db.VarChar(120)
+  contentType         String?          @map("content_type") @db.VarChar(40)
+  sizeBytes           Int?             @map("size_bytes")
+  /// Goes up each time the file is replaced; part of the public address so browsers fetch the new one.
+  fileVersion         Int              @default(1) @map("file_version")
+  width               Int?
+  height              Int?
+  // --- an embedded video (source YOUTUBE or VIMEO): its id on that service ---
+  externalId          String?          @map("external_id") @db.VarChar(60)
+  durationSeconds     Int              @default(0) @map("duration_seconds")
+  thumbnailAssetId    String?          @map("thumbnail_asset_id") @db.Uuid
+  /// The English captions file (WebVTT text). Required to publish.
+  captionsVtt         String?          @map("captions_vtt")
+  captionsUpdatedAt   DateTime?        @map("captions_updated_at") @db.Timestamptz(3)
+  /// The plain-text transcript. Optional.
+  transcript          String?
+  transcriptUpdatedAt DateTime?        @map("transcript_updated_at") @db.Timestamptz(3)
+  /// True when learners appear: then guardian consent (with the date signed) is required to publish.
+  showsLearners       Boolean          @default(false) @map("shows_learners")
+  /// Learners shown as first name + last initial only, e.g. "Ada O.".
+  peopleInVideo       String[]         @default([]) @map("people_in_video")
+  consentSignedOn     DateTime?        @map("consent_signed_on") @db.Date
+  showOnHome          Boolean          @default(false) @map("show_on_home")
+  showOnStudio        Boolean          @default(true) @map("show_on_studio")
+  showOnShowcase      Boolean          @default(false) @map("show_on_showcase")
+  featured            Boolean          @default(false)
+  /// Position among the videos of the same primary category (0 = first).
+  displayOrder        Int              @default(0) @map("display_order")
+  status              CmsContentStatus @default(DRAFT)
+  postedOn            DateTime?        @map("posted_on") @db.Date
+  publishedAt         DateTime?        @map("published_at") @db.Timestamptz(3)
+  createdById         String?          @map("created_by_id") @db.Uuid
+  createdAt           DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  thumbnail    CmsMediaAsset?   @relation(fields: [thumbnailAssetId], references: [id], onDelete: Restrict)
+  createdBy    User?            @relation("CmsVideoCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  bannerSlides CmsBannerSlide[]
+
+  @@index([status, category, displayOrder])
+  @@index([status, featured])
+  @@map("cms_videos")
+}
+
+/// One slide of a page banner. It can appear on several pages (see CmsBannerSlidePlacement),
+/// shows a photo or a muted looping video, is LIVE only when published and inside its schedule.
+model CmsBannerSlide {
+  id           String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// A short title (2 to 4 words works best).
+  title        String             @db.VarChar(60)
+  tagline      String             @default("") @db.VarChar(160)
+  mediaType    CmsBannerMediaType @map("media_type")
+  /// The photo - or, for a video slide, the picture shown until the video loads and to visitors
+  /// who asked their device for reduced motion.
+  imageAssetId String             @map("image_asset_id") @db.Uuid
+  videoId      String?            @map("video_id") @db.Uuid
+  /// PUBLISHED = Live; DRAFT = not shown.
+  status       CmsContentStatus   @default(DRAFT)
+  /// Optional schedule: shown only from "startsAt" and until "endsAt".
+  startsAt     DateTime?          @map("starts_at") @db.Timestamptz(3)
+  endsAt       DateTime?          @map("ends_at") @db.Timestamptz(3)
+  createdById  String?            @map("created_by_id") @db.Uuid
+  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  image      CmsMediaAsset             @relation(fields: [imageAssetId], references: [id], onDelete: Restrict)
+  video      CmsVideo?                 @relation(fields: [videoId], references: [id], onDelete: Restrict)
+  createdBy  User?                     @relation("CmsBannerSlideCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  placements CmsBannerSlidePlacement[]
+
+  @@index([status])
+  @@map("cms_banner_slides")
+}
+
+/// "This slide is shown on this page, at this position." Each page has its own order.
+model CmsBannerSlidePlacement {
+  slideId  String        @map("slide_id") @db.Uuid
+  page     CmsBannerPage
+  /// 0 = first.
+  position Int           @default(0)
+
+  slide CmsBannerSlide @relation(fields: [slideId], references: [id], onDelete: Cascade)
+
+  @@id([slideId, page])
+  @@index([page, position])
+  @@map("cms_banner_slide_placements")
 }
