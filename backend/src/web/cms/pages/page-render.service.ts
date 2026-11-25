@@ -12,7 +12,8 @@
  *       "people"              the published People profiles
  *       "applications_panel"  open or closed, from the website settings
  *       "contact_info"        contact details from the website settings
- *       "video_row", "showcase_grid"  empty lists until their libraries exist
+ *       "video_row"           the published videos (featured, or one category)
+ *       "showcase_grid"       an empty list until the showcase library exists
  *
  * The same renderer serves the published page and the admin preview, so a
  * preview is exactly what publishing would produce.
@@ -23,6 +24,7 @@ import { PrismaService } from '../../../prisma/prisma.service';
 import { publicImageSelect, toPublicImage } from '../media/media.view';
 import { PeopleService } from '../people/people.service';
 import { SiteService } from '../site/site.service';
+import { VideosService } from '../videos/videos.service';
 import { PageContent, pageAssetIds, StoredSection } from './page-content';
 import { parseRichText } from './rich-text';
 import { mapPaths } from './section-paths';
@@ -43,6 +45,7 @@ export class PageRenderService {
     private readonly prisma: PrismaService,
     private readonly people: PeopleService,
     private readonly site: SiteService,
+    private readonly videos: VideosService,
   ) {}
 
   async render(page: { path: string; title: string }, content: PageContent, meta: RenderMeta) {
@@ -100,6 +103,13 @@ export class PageRenderService {
       case 'contact_info':
         return site ? { contact: site.contact } : {};
       case 'video_row':
+        return {
+          items: await this.videos.listForSection({
+            source: section.fields.source as 'FEATURED' | 'CATEGORY',
+            category: String(section.fields.category ?? ''),
+            count: Number(section.fields.count ?? 3),
+          }),
+        };
       case 'showcase_grid':
         return { items: [] };
       default:

@@ -9,11 +9,13 @@
  * part of the application (they are, in AppModule). File storage and signed links come
  * from the shared PlatformModule (src/platform), which is global.
  *
- * ProgressStateService, PublishedCourseService and SubmissionFilesService are exported
+ * It uses AchievementsModule to record activity and award badges.
+ * ProgressStateService, SubmissionFilesService and the published-course reader are exported
  * because the grading module uses them too.
  */
 import { Module } from '@nestjs/common';
 
+import { AchievementsModule } from '../achievements/achievements.module';
 import { AuthModule } from '../auth/auth.module';
 import { AssignmentContextService } from './assignment-context.service';
 import { AssignmentsController } from './assignments.controller';
@@ -23,17 +25,16 @@ import { LearningAccessService } from './learning-access.service';
 import { LearningController } from './learning.controller';
 import { LearningService } from './learning.service';
 import { ProgressStateService } from './progress-state.service';
-import { PublishedCourseService } from './published-course.service';
+import { PublishedCourseModule } from './published-course.module';
 import { SubmissionFilesService } from './submission-files.service';
 import { SubmissionsService } from './submissions.service';
 import { WeekUnlockService } from './week-unlock.service';
 
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, PublishedCourseModule, AchievementsModule],
   controllers: [LearningController, AssignmentsController, EnrollmentUnlockController],
   providers: [
     LearningAccessService,
-    PublishedCourseService,
     ProgressStateService,
     LearningService,
     AssignmentContextService,
@@ -42,6 +43,6 @@ import { WeekUnlockService } from './week-unlock.service';
     SubmissionsService,
     WeekUnlockService,
   ],
-  exports: [PublishedCourseService, ProgressStateService, SubmissionFilesService],
+  exports: [PublishedCourseModule, ProgressStateService, SubmissionFilesService],
 })
 export class LearningModule {}

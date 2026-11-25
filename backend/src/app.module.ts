@@ -13,6 +13,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { AchievementsModule } from './achievements/achievements.module';
 import { AdminModule } from './admin/admin.module';
 import { AuthModule } from './auth/auth.module';
 import { AuthGuard } from './auth/guards/auth.guard';
@@ -119,6 +120,7 @@ import { WebModule } from './web/web.module';
     CourseContentModule,
     LearningModule,
     GradingModule,
+    AchievementsModule,
     StudentsModule,
     PublicModule,
     HealthModule,

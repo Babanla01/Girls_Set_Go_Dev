@@ -27,8 +27,10 @@
  */
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AccountStatus, EnrollmentStatus, SubmissionReview, SubmissionStatus } from '@prisma/client';
+import { AccountStatus, ActivityType, EnrollmentStatus, SubmissionReview, SubmissionStatus } from '@prisma/client';
 
+import { ActivityService } from '../achievements/activity.service';
+import { BadgesService } from '../achievements/badges.service';
 import type { AuthenticatedUser, RequestContext } from '../auth/auth.types';
 import { AuditService } from '../common/audit/audit.service';
 import { OutboxEmail, OutboxService } from '../common/outbox/outbox.service';
@@ -66,6 +68,8 @@ export class ReviewsService {
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
     private readonly config: ConfigService<Env, true>,
+    private readonly activity: ActivityService,
+    private readonly badges: BadgesService,
   ) {}
 
   // ------------------------------------------------------------------ detail
@@ -253,6 +257,17 @@ export class ReviewsService {
         ? await tx.submissionReview.update({ where: { id: existing.id }, data: { ...data, editedAt: now } })
         : await tx.submissionReview.create({ data: { submissionId, versionNumber: latest, reviewerId: user.id, ...data } });
 
+      // The student's activity log (first review only; edits are not new events). Ids and the outcome only - never the feedback.
+      if (!existing) {
+        await this.activity.record(tx, {
+          enrollmentId: enrollment.id,
+          type: ActivityType.REVIEW_RECEIVED,
+          refKey: `review:${review.id}`,
+          occurredAt: review.createdAt,
+          details: { assignmentId: submission.assignmentId, assignmentTitle, outcome: dto.outcome },
+        });
+      }
+
       const updated = await tx.submission.update({
         where: { id: submissionId },
         data: {
@@ -308,6 +323,9 @@ export class ReviewsService {
 
       return { review, updated, opened, edited: existing !== null, email };
     });
+
+    // A review can unlock "Halfway there" and "Showcase ready". This never affects the review itself.
+    await this.badges.syncQuietly(enrollment.id, ['HALFWAY_THERE', 'SHOWCASE_READY']);
 
     // Development only: print the email's link in the terminal (never in production).
     if (saved.email) this.outbox.previewInDevelopment(saved.email);

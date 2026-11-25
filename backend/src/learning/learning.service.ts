@@ -21,7 +21,10 @@
  *    can never delete it.
  */
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ActivityType } from '@prisma/client';
 
+import { ActivityService } from '../achievements/activity.service';
+import { BadgesService } from '../achievements/badges.service';
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { formatCalendarDate } from '../catalog/catalog.util';
 import type { Snapshot } from '../course-content/snapshot';
@@ -52,6 +55,8 @@ export class LearningService {
     private readonly access: LearningAccessService,
     private readonly published: PublishedCourseService,
     private readonly progress: ProgressStateService,
+    private readonly activity: ActivityService,
+    private readonly badges: BadgesService,
   ) {}
 
   // ---------------------------------------------------------------- overview
@@ -158,7 +163,7 @@ export class LearningService {
     if (context.readOnly) throw new ForbiddenException(READ_ONLY_MESSAGE);
     const snapshot = await this.published.get(context.contentId, context.version);
 
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const state = await this.progress.load(tx, context.enrollmentId, snapshot);
       const before = this.progress.evaluate(snapshot, state);
 
@@ -188,6 +193,17 @@ export class LearningService {
         where: { enrollmentId_lessonId: { enrollmentId: context.enrollmentId, lessonId } },
         select: { completedAt: true },
       });
+      // The activity log: written in this same transaction, so it can never miss a completion.
+      if (newlyCompleted) {
+        await this.activity.record(tx, {
+          enrollmentId: context.enrollmentId,
+          type: ActivityType.LESSON_COMPLETED,
+          refKey: `lesson:${lessonId}`,
+          occurredAt: stored.completedAt ?? new Date(),
+          details: { lessonId, lessonTitle: found.lesson.title, weekPosition: found.week.position },
+        });
+      }
+
       const progress = summarizeProgress(after);
       const weekAfter = locateLesson(after, lessonId)?.week;
 
@@ -200,6 +216,10 @@ export class LearningService {
         nextLesson: findNextLesson(after, lessonId),
       };
     });
+
+    // Finishing a lesson can earn "Halfway there". This never affects the lesson itself.
+    await this.badges.syncQuietly(context.enrollmentId, ['HALFWAY_THERE']);
+    return result;
   }
 
   // ---------------------------------------------------------- video position

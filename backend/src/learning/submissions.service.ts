@@ -26,8 +26,10 @@
  * records are written in ONE transaction; if that fails, the saved files are removed again.
  */
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { ReviewOutcome, SubmissionStatus } from '@prisma/client';
+import { ActivityType, ReviewOutcome, SubmissionStatus } from '@prisma/client';
 
+import { ActivityService } from '../achievements/activity.service';
+import { BadgesService } from '../achievements/badges.service';
 import type { AuthenticatedUser, RequestContext } from '../auth/auth.types';
 import { AuditService } from '../common/audit/audit.service';
 import { parseHttpUrl } from '../course-content/block-data';
@@ -64,6 +66,8 @@ export class SubmissionsService {
     private readonly files: SubmissionFilesService,
     private readonly audit: AuditService,
     private readonly published: PublishedCourseService,
+    private readonly activity: ActivityService,
+    private readonly badges: BadgesService,
   ) {}
 
   // ------------------------------------------------------------------ submit
@@ -166,7 +170,7 @@ export class SubmissionsService {
         });
         if (!decision.allowed) throw new ConflictException(decision.reason);
 
-        await tx.submissionVersion.create({
+        const version = await tx.submissionVersion.create({
           data: {
             submissionId,
             number: versionCount + 1,
@@ -176,8 +180,18 @@ export class SubmissionsService {
             note: dto.note ?? null,
             files: { create: saved.map((file, position) => ({ fileId: file.id, position: position + 1 })) },
           },
+          select: { id: true, createdAt: true },
         });
         await tx.submission.update({ where: { id: submissionId }, data: { status: SubmissionStatus.SUBMITTED, revisionOpenUntil: null } });
+
+        // The activity log: written in this same transaction, so it can never miss a submission.
+        await this.activity.record(tx, {
+          enrollmentId: ctx.enrollmentId,
+          type: ActivityType.SUBMISSION_SENT,
+          refKey: `version:${version.id}`,
+          occurredAt: version.createdAt,
+          details: { assignmentId, assignmentTitle: assignment.title, version: versionCount + 1, files: saved.length, late: decision.isLate },
+        });
 
         await this.audit.record(
           {
@@ -195,6 +209,9 @@ export class SubmissionsService {
       await this.discard(saved); // nothing is left behind when something fails
       throw error;
     }
+
+    // Sending work can earn badges (first submission, on time, feedback loop). This never affects the submission.
+    await this.badges.syncQuietly(ctx.enrollmentId, ['FIRST_SUBMISSION', 'ON_TIME', 'FEEDBACK_LOOP']);
 
     return { submission: await this.fullView(ctx.enrollmentId, assignmentId, user.id, ctx.contentId) };
   }

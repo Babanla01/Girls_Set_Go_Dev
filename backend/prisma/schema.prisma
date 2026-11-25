@@ -102,6 +102,25 @@ enum SubmissionStatus {
   COMPLETED
 }
 
+/// Kinds of event in a student's activity log (append-only).
+enum ActivityType {
+  ENROLLED
+  LESSON_COMPLETED
+  SUBMISSION_SENT
+  REVIEW_RECEIVED
+  BADGE_EARNED
+}
+
+/// The six badges a student can earn.
+enum BadgeKey {
+  WELCOME_ABOARD
+  FIRST_SUBMISSION
+  ON_TIME
+  FEEDBACK_LOOP
+  HALFWAY_THERE
+  SHOWCASE_READY
+}
+
 /// What an instructor decides when reviewing a submission.
 enum ReviewOutcome {
   REVIEWED
@@ -586,6 +605,9 @@ model Enrollment {
   weekUnlocks    WeekUnlock[]
   /// The work she sent in (see Submission).
   submissions    Submission[]
+  /// Her activity log and the badges she has earned.
+  activityEvents ActivityEvent[]
+  badges         StudentBadge[]
 
   @@index([cohortId, status])
   @@index([studentId, status])
@@ -967,6 +989,44 @@ model SubmissionReview {
   @@unique([submissionId, versionNumber])
   @@index([reviewerId, createdAt])
   @@map("submission_reviews")
+}
+
+// ------------------------------------------------------ activity log and badges
+
+/// One thing that happened in a student's learning (she joined, completed a lesson, sent work, got a
+/// review, earned a badge). APPEND-ONLY: the database refuses to change or delete a row. The activity
+/// feed is read from it. (enrollmentId, type, refKey) is unique, so the same thing is never logged twice.
+/// `details` holds ids and small facts only - never feedback text or scores.
+model ActivityEvent {
+  id           String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  enrollmentId String       @map("enrollment_id") @db.Uuid
+  type         ActivityType
+  /// What it is about, e.g. "lesson:<id>", "version:<id>", "review:<id>", "badge:<KEY>", "enrolled".
+  refKey       String       @map("ref_key") @db.VarChar(100)
+  /// When it really happened.
+  occurredAt   DateTime     @map("occurred_at") @db.Timestamptz(3)
+  details      Json         @default("{}")
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+
+  @@unique([enrollmentId, type, refKey])
+  @@index([enrollmentId, occurredAt])
+  @@map("activity_events")
+}
+
+/// A badge a student has earned, and when. Never changed or removed (the database refuses).
+model StudentBadge {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  enrollmentId String   @map("enrollment_id") @db.Uuid
+  badge        BadgeKey
+  earnedAt     DateTime @map("earned_at") @db.Timestamptz(3)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  enrollment Enrollment @relation(fields: [enrollmentId], references: [id], onDelete: Restrict)
+
+  @@unique([enrollmentId, badge])
+  @@map("student_badges")
 }
 
 // ============================================================================
