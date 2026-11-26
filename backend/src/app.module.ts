@@ -31,6 +31,7 @@ import { InstructorModule } from './instructor/instructor.module';
 import { LearningModule } from './learning/learning.module';
 import { PlatformModule } from './platform/platform.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { ProfileModule } from './profile/profile.module';
 import { PublicModule } from './public/public.module';
 import { RedisModule } from './redis/redis.module';
 import { RedisService } from './redis/redis.service';
@@ -121,6 +122,7 @@ import { WebModule } from './web/web.module';
     LearningModule,
     GradingModule,
     AchievementsModule,
+    ProfileModule,
     StudentsModule,
     PublicModule,
     HealthModule,

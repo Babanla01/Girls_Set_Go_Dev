@@ -2,7 +2,8 @@
  * learning.module.ts
  * ---------------------------------------------------------------------------
  * The student's learning experience: the course overview, lessons, completion,
- * video resume, assignments and submissions, and opening a week early for one student.
+ * video resume, assignments and submissions, the learning dashboard, and opening a week early
+ * for one student.
  *
  * It relies on the ownership rule registered by CourseContentModule
  * ("course-content.manage") for the early-open action, so both modules must be
@@ -20,6 +21,8 @@ import { AuthModule } from '../auth/auth.module';
 import { AssignmentContextService } from './assignment-context.service';
 import { AssignmentsController } from './assignments.controller';
 import { AssignmentsService } from './assignments.service';
+import { DashboardController } from './dashboard.controller';
+import { DashboardService } from './dashboard.service';
 import { EnrollmentUnlockController } from './enrollment-unlock.controller';
 import { LearningAccessService } from './learning-access.service';
 import { LearningController } from './learning.controller';
@@ -32,13 +35,14 @@ import { WeekUnlockService } from './week-unlock.service';
 
 @Module({
   imports: [AuthModule, PublishedCourseModule, AchievementsModule],
-  controllers: [LearningController, AssignmentsController, EnrollmentUnlockController],
+  controllers: [LearningController, AssignmentsController, DashboardController, EnrollmentUnlockController],
   providers: [
     LearningAccessService,
     ProgressStateService,
     LearningService,
     AssignmentContextService,
     AssignmentsService,
+    DashboardService,
     SubmissionFilesService,
     SubmissionsService,
     WeekUnlockService,

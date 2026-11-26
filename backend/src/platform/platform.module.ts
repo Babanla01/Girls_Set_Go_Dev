@@ -7,11 +7,14 @@
  *   SettingsRegistry / SettingsService   named settings with rules and defaults
  *   StorageService                       the one door to file storage
  *   SignedUrlService                     short-lived links for private files
+ *   NotificationsService                 the notification bell (every role); call notify(...) from anywhere
  *
  * Global: any module can inject these without importing this one.
  */
 import { Global, Module } from '@nestjs/common';
 
+import { NotificationsController } from './notifications/notifications.controller';
+import { NotificationsService } from './notifications/notifications.service';
 import { SettingsController } from './settings/settings.controller';
 import { SettingsRegistry } from './settings/settings.registry';
 import { SettingsService } from './settings/settings.service';
@@ -23,15 +26,16 @@ import { STORAGE_PROVIDER } from './storage/storage.types';
 
 @Global()
 @Module({
-  controllers: [SettingsController, PrivateFilesController],
+  controllers: [SettingsController, PrivateFilesController, NotificationsController],
   providers: [
     SettingsRegistry,
     SettingsService,
     StorageService,
     SignedUrlService,
+    NotificationsService,
     // To move files to cloud storage later, point this at a different class. Nothing else changes.
     { provide: STORAGE_PROVIDER, useClass: LocalDiskStorage },
   ],
-  exports: [SettingsRegistry, SettingsService, StorageService, SignedUrlService],
+  exports: [SettingsRegistry, SettingsService, StorageService, SignedUrlService, NotificationsService],
 })
 export class PlatformModule {}

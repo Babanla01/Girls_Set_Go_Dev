@@ -3,7 +3,9 @@
 //
 // MERGED FILE = LMS core + course content/versions/progress/assignments
 //               + file storage & student submissions + submission reviews
-//               + WEB section (CMS pages, media library, platform settings).
+//               + activity log, badges & per-user settings
+//               + WEB section (CMS pages, media library, platform settings,
+//                 notifications, announcements, forms).
 //
 // This file describes the tables to Prisma (so the code is type-safe).
 // The matching SQL lives in prisma/migrations/. A few rules that Prisma cannot
@@ -121,6 +123,13 @@ enum BadgeKey {
   SHOWCASE_READY
 }
 
+/// Whether a person's profile panel is open, collapsed to a thin rail, or closed (remembered per user).
+enum PanelState {
+  OPEN
+  COLLAPSED
+  CLOSED
+}
+
 /// What an instructor decides when reviewing a submission.
 enum ReviewOutcome {
   REVIEWED
@@ -228,6 +237,39 @@ enum CmsBannerPage {
   CREATIVE_STUDIO
 }
 
+/// (WEB) Who an announcement is for: every cohort that is running or about to run, one track, or one cohort.
+enum AnnAudienceType {
+  ALL_COHORTS
+  TRACK
+  COHORT
+}
+
+/// (WEB) DRAFT = being written, nobody sees it; PUBLISHED = visible to its audience.
+enum AnnStatus {
+  DRAFT
+  PUBLISHED
+}
+
+/// (WEB) The public forms whose messages are stored (the notify-me list has its own table).
+enum FormSubmissionType {
+  CONTACT
+  VOLUNTEER
+  PARTNER
+}
+
+/// (WEB) NEW = nobody has looked yet; READ = seen; ARCHIVED = dealt with.
+enum FormSubmissionStatus {
+  NEW
+  READ
+  ARCHIVED
+}
+
+/// (WEB) Whether an address on the notify-me list still wants emails.
+enum FormNotifyMeStatus {
+  SUBSCRIBED
+  UNSUBSCRIBED
+}
+
 // -------------------------------------------------------------------- models
 
 /// Every person who can sign in: students, instructors and admins.
@@ -263,6 +305,8 @@ model User {
   cohortAssignments           CohortInstructor[]      @relation("CohortInstructorUser")
   cohortAssignmentsMade       CohortInstructor[]      @relation("CohortAssignedBy")
   studentProfile              StudentProfile?
+  /// Her saved settings (for now: the profile panel).
+  preference                  UserPreference?
   studentApplication          StudentApplication?     @relation("ApplicationStudent")
   studentApplicationsReviewed StudentApplication[]    @relation("StudentApplicationReviewedBy")
   enrollments                 Enrollment[]            @relation("EnrollmentStudent")
@@ -281,6 +325,9 @@ model User {
   cmsPageVersionsPublished    CmsPageVersion[]        @relation("CmsPageVersionPublishedBy")
   cmsVideosCreated            CmsVideo[]              @relation("CmsVideoCreatedBy")
   cmsBannerSlidesCreated      CmsBannerSlide[]        @relation("CmsBannerSlideCreatedBy")
+  platformNotifications       PlatformNotification[]  @relation("PlatformNotificationRecipient")
+  annAnnouncementsAuthored    AnnAnnouncement[]       @relation("AnnAnnouncementAuthor")
+  formSubmissionsHandled      FormSubmission[]        @relation("FormSubmissionHandledBy")
   // --- end relations: WEB ---
 
   @@index([role, status])
@@ -531,6 +578,12 @@ model StudentProfile {
   guardianName  String?  @map("guardian_name") @db.VarChar(120)
   guardianEmail String?  @map("guardian_email") @db.VarChar(254)
   guardianPhone String?  @map("guardian_phone") @db.VarChar(30)
+  /// What she is interested in (short chips, at most 10). Visible only to her, her instructors and admins.
+  interests     String[] @default([])
+  /// Her goal for the bootcamp (280 characters at most). Same visibility as interests.
+  goal          String?  @db.VarChar(280)
+  /// Her "after the bootcamp" choice: a KEY from the list in the code (profile.constants.ts).
+  afterBootcamp String?  @map("after_bootcamp") @db.VarChar(60)
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
@@ -1029,6 +1082,20 @@ model StudentBadge {
   @@map("student_badges")
 }
 
+// ------------------------------------------------------ per-user settings
+
+/// A person's saved settings (one row, created the first time she changes one). For now: whether
+/// the profile panel is open, collapsed or closed. Works for every role.
+model UserPreference {
+  userId       String     @id @map("user_id") @db.Uuid
+  profilePanel PanelState @default(OPEN) @map("profile_panel")
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
 // ============================================================================
 // WEB section (owner: WEB account)
 // Website editor (CMS), announcements, forms, shop, and the shared platform
@@ -1300,4 +1367,107 @@ model CmsBannerSlidePlacement {
   @@id([slideId, page])
   @@index([page, position])
   @@map("cms_banner_slide_placements")
+}
+
+/// One item in a person's notification bell. `type` + `payload` say WHAT happened; the wording
+/// is built from them when the list is read (see notification.types.ts), so a change of wording
+/// applies to old notifications too. Never holds a password, a link token or private feedback.
+model PlatformNotification {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  recipientId String    @map("recipient_id") @db.Uuid
+  /// e.g. "week.opened". Lowercase letters, digits, dots and underscores.
+  type        String    @db.VarChar(60)
+  payload     Json      @default("{}")
+  /// Stops the same event notifying the same person twice (empty = no such guard).
+  dedupeKey   String?   @map("dedupe_key") @db.VarChar(120)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// Empty = unread.
+  readAt      DateTime? @map("read_at") @db.Timestamptz(3)
+
+  recipient User @relation("PlatformNotificationRecipient", fields: [recipientId], references: [id], onDelete: Restrict)
+
+  @@index([recipientId, readAt, createdAt(sort: Desc)])
+  @@map("platform_notifications")
+}
+
+/// A short update for a learning group (a cohort, a track, or every running cohort). Written by an
+/// admin or an instructor; students only read it. No replies, comments or reactions.
+/// `trackId` and `cohortId` are plain ids (tracks and cohorts are archived or closed, never deleted).
+model AnnAnnouncement {
+  id           String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title        String          @db.VarChar(120)
+  /// Plain text, up to 1500 characters.
+  message      String          @db.VarChar(1500)
+  audienceType AnnAudienceType @map("audience_type")
+  trackId      String?         @map("track_id") @db.Uuid
+  cohortId     String?         @map("cohort_id") @db.Uuid
+  status       AnnStatus       @default(DRAFT)
+  authorId     String          @map("author_id") @db.Uuid
+  /// The role the author had when writing it.
+  authorRole   Role            @map("author_role")
+  /// When it went live (empty while a draft).
+  publishedAt  DateTime?       @map("published_at") @db.Timestamptz(3)
+  /// When its text was last changed AFTER it was published (students see "Edited ...").
+  editedAt     DateTime?       @map("edited_at") @db.Timestamptz(3)
+  createdAt    DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  author User @relation("AnnAnnouncementAuthor", fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([status, publishedAt(sort: Desc)])
+  @@index([cohortId])
+  @@index([trackId])
+  @@index([authorId])
+  @@map("ann_announcements")
+}
+
+/// A message sent through the public Contact, Volunteer or Partner form. Personal data: only
+/// admins can read it. `payload` holds the form's fields exactly as validated.
+model FormSubmission {
+  id            String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type          FormSubmissionType
+  status        FormSubmissionStatus @default(NEW)
+  senderName    String               @map("sender_name") @db.VarChar(160)
+  /// Always lowercase.
+  senderEmail   String               @map("sender_email") @db.VarChar(254)
+  payload       Json
+  /// The first words of the message, for the admin list.
+  summary       String               @db.VarChar(200)
+  /// The inbox the team copy was emailed to (empty when none is set up yet).
+  routedTo      String?              @map("routed_to") @db.VarChar(254)
+  /// A fingerprint of type + email + message, to ignore an accidental double send.
+  contentHash   String               @map("content_hash") @db.Char(64)
+  handledById   String?              @map("handled_by_id") @db.Uuid
+  handledAt     DateTime?            @map("handled_at") @db.Timestamptz(3)
+  createdAt     DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  handledBy User? @relation("FormSubmissionHandledBy", fields: [handledById], references: [id], onDelete: Restrict)
+
+  @@index([type, status, createdAt(sort: Desc)])
+  @@index([contentHash, createdAt])
+  @@map("form_submissions")
+}
+
+/// Someone who asked to be emailed when applications open (the closed-bootcamp "Notify me" form).
+/// The unsubscribe link in each email is signed, so no secret is stored here.
+model FormNotifyMeSignup {
+  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Always lowercase; one row per address.
+  email          String             @unique @db.VarChar(254)
+  /// The "I am a..." answer.
+  roleLabel      String             @map("role_label") @db.VarChar(60)
+  /// A track name, or "Not sure yet".
+  interestedIn   String             @map("interested_in") @db.VarChar(100)
+  /// Ticked by someone under 18: their parent or guardian knows they are signing up.
+  guardianKnows  Boolean            @default(false) @map("guardian_knows")
+  status         FormNotifyMeStatus @default(SUBSCRIBED)
+  subscribedAt   DateTime           @default(now()) @map("subscribed_at") @db.Timestamptz(3)
+  unsubscribedAt DateTime?          @map("unsubscribed_at") @db.Timestamptz(3)
+  /// The last time the "applications are open" email was queued for this address.
+  lastNotifiedAt DateTime?          @map("last_notified_at") @db.Timestamptz(3)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status])
+  @@map("form_notify_me_signups")
 }
