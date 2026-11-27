@@ -7,16 +7,23 @@
  */
 import { Module, OnModuleInit } from '@nestjs/common';
 
+import { AchievementsModule } from '../achievements/achievements.module';
 import { AuthModule } from '../auth/auth.module';
 import { PolicyService } from '../auth/policy/policy.service';
+import { GradingModule } from '../grading/grading.module';
+import { LearningModule } from '../learning/learning.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { InstructorCohortsController } from './instructor-cohorts.controller';
 import { COHORT_VIEW_ACTION, InstructorCohortsService } from './instructor-cohorts.service';
+import { InstructorDashboardService } from './workspace/instructor-dashboard.service';
+import { InstructorStudentsService } from './workspace/instructor-students.service';
+import { RosterService } from './workspace/roster.service';
+import { WorkspaceController } from './workspace/workspace.controller';
 
 @Module({
-  imports: [AuthModule],
-  controllers: [InstructorCohortsController],
-  providers: [InstructorCohortsService],
+  imports: [AuthModule, LearningModule, GradingModule, AchievementsModule],
+  controllers: [InstructorCohortsController, WorkspaceController],
+  providers: [InstructorCohortsService, RosterService, InstructorStudentsService, InstructorDashboardService],
 })
 export class InstructorModule implements OnModuleInit {
   constructor(
